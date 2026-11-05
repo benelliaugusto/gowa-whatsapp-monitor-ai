@@ -52,7 +52,8 @@ O que você ganha em relação à v1 (Dockerfile único com `main.py` embutido):
 ├── docs/
 │   ├── AGENT_PROMPT.md       # contrato/prompt do agente (servido em /api/v1/contract)
 │   ├── API.md                # referência com curl
-│   └── EASYPANEL.md          # passo a passo do deploy
+│   ├── EASYPANEL.md          # passo a passo do deploy
+│   └── ROADMAP.md            # plano de melhorias priorizado
 ├── examples/agent_claude.py  # agente de ponta a ponta (Claude ou Grok)
 └── scripts/smoke_test.py     # 43 verificações de fumaça
 ```
@@ -228,6 +229,9 @@ faça disparo em massa. Os dados de conversas são sensíveis: mantenha o painel
 atrás de senha/HTTPS e trate conforme a LGPD.
 
 ## Roadmap sugerido
+
+Plano priorizado, com impacto, esforço e critérios de sucesso:
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - Relatórios semanais/mensais agregados (`kind: weekly` já é aceito pela API).
 - Envio automático do relatório por e-mail/WhatsApp ao gestor às 19h.
