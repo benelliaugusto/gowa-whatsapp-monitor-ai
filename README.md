@@ -1,1 +1,235 @@
-# gowa-whatsapp-monitor-ai
+# monitor-ia
+
+Painel de conversas do WhatsApp para o gestor da clínica + **API de leitura e
+escrita para agentes de IA**. O monitor não chama IA: ele guarda as conversas
+(GOWA), entrega um *digest* pronto para o LLM e recebe dele as análises e o
+relatório do dia.
+
+```
+WhatsApp ──► GOWA (gowa-server) ──webhook──► monitor-ia ──► SQLite (/data/monitor.db)
+                    ▲                             │
+                    └──── GET /chats,             │  GET  /api/v1/digest   (texto do dia)
+                          /chat/{jid}/messages ◄──┘  POST /api/v1/analyses (por conversa)
+                                                      POST /api/v1/reports  (relatório do gestor)
+                                                             ▲
+                                    Claude Code / Grok / n8n / script ─┘  (a IA do cliente)
+```
+
+O que você ganha em relação à v1 (Dockerfile único com `main.py` embutido):
+
+| | v1 (arquivo `.dockerfile`) | v2 (este projeto) |
+|---|---|---|
+| Código | 1.000 linhas dentro de um heredoc | pacote `app/` modular, revisável |
+| IA | chamada síncrona à OpenAI dentro da requisição | **API pull**: a sua IA lê e grava (Claude/Grok/n8n) |
+| API | nenhuma | REST versionada + Swagger em `/docs` |
+| Dados | `mensagens` sem índice/limpeza | schema com índices, WAL, dedup por `msg_uid` |
+| Segurança | aberta | API keys (`ro`/`rw`), Basic Auth no painel, HMAC no webhook |
+| Deploy | colar Dockerfile na UI | repositório GitHub → build Dockerfile |
+
+## Estrutura
+
+```
+.
+├── Dockerfile                # imagem de produção (python:3.12-slim)
+├── docker-compose.yml        # teste local: gowa + monitor-ia
+├── requirements.txt
+├── .env.example              # todas as variáveis documentadas
+├── app/
+│   ├── main.py               # FastAPI: lifespan, scheduler, middleware
+│   ├── config.py             # settings (12-factor)
+│   ├── db.py                 # SQLite: schema, consultas, migrations idempotentes
+│   ├── gowa.py               # cliente GOWA + sincronização de histórico
+│   ├── webhook.py            # recebe eventos do GOWA (HMAC + dedup)
+│   ├── api.py                # /api/v1 para os agentes de IA
+│   ├── schemas.py            # contrato Pydantic (OpenAPI)
+│   ├── digest.py             # conversas -> texto compacto para o LLM
+│   ├── dashboard.py          # painel do gestor (server-side)
+│   ├── templating.py         # Jinja2 + markdown sanitizado
+│   ├── security.py           # API keys, Basic Auth, HMAC
+│   ├── timeutil.py           # UTC no banco, America/Sao_Paulo na borda
+│   ├── templates/            # painel: painel, conversa, relatórios, status
+│   └── static/style.css
+├── docs/
+│   ├── AGENT_PROMPT.md       # contrato/prompt do agente (servido em /api/v1/contract)
+│   ├── API.md                # referência com curl
+│   └── EASYPANEL.md          # passo a passo do deploy
+├── examples/agent_claude.py  # agente de ponta a ponta (Claude ou Grok)
+└── scripts/smoke_test.py     # 43 verificações de fumaça
+```
+
+## Rodando local (5 minutos)
+
+Pré-requisitos: Docker + `docker compose`.
+
+```bash
+cp .env.example .env
+# edite .env: GOWA_BASIC_AUTH, GOWA_WEBHOOK_SECRET, API_KEYS, DASHBOARD_PASSWORD
+docker compose up --build
+```
+
+- Painel: <http://localhost:8000> (`gestor` / senha do `.env`)
+- Swagger: <http://localhost:8000/docs>
+- GOWA: <http://localhost:3000> (pareie o número pelo QR do GOWA)
+
+Sem Docker (Python 3.12):
+
+```bash
+python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+export DATABASE_PATH=./data/monitor.db
+export API_KEYS="claude:rw:chave-local" DASHBOARD_PASSWORD=admin
+uvicorn app.main:app --reload --port 8000
+```
+
+## Deploy no Easypanel
+
+Resumo: **repositório privado no GitHub → New Service → App → Build: Dockerfile**.
+O guia completo (env, volume, domínio, rede interna, backup, troubleshooting) está
+em [`docs/EASYPANEL.md`](docs/EASYPANEL.md).
+
+Pontos que mais quebram:
+
+1. **Volume** montado em `/data` (senão o histórico se perde a cada deploy).
+2. `GOWA_URL` apontando para o host interno: `http://<projeto>_gowa-server:3000`
+   (valide no Shell do serviço com `getent hosts`).
+3. `WHATSAPP_WEBHOOK` do GOWA = `https://seu-dominio/wa-hook` e
+   `GOWA_WEBHOOK_SECRET` = `WHATSAPP_WEBHOOK_SECRET`.
+4. `API_KEYS` definido (sem chave, `/api/v1` responde 401 — é o esperado).
+
+> Zip não é uma origem de build do Easypanel; se GitHub não for possível, use
+> imagem no Docker Hub/GHCR (`docker build` + `push`) e "Source: Docker image".
+
+## API para a IA
+
+Documentação completa: [`docs/API.md`](docs/API.md) · contrato do agente:
+[`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md) · Swagger: `/docs`.
+
+| método | rota | para quê |
+|---|---|---|
+| GET | `/api/v1/digest?date=YYYY-MM-DD&format=text` | conversas do dia em texto pronto para o LLM |
+| GET | `/api/v1/conversations/{jid}/transcript?date=` | transcrição de uma conversa |
+| GET | `/api/v1/conversations?date=` | lista com contadores |
+| GET | `/api/v1/stats/daily?date=` | KPIs do dia |
+| POST | `/api/v1/analyses` | upsert da análise de uma conversa no dia |
+| POST | `/api/v1/reports` | publica o relatório do gestor (idempotente) |
+| PATCH | `/api/v1/reports/{id}` | atualiza/despublica |
+| POST | `/api/v1/sync` | força sincronização com o GOWA |
+| GET | `/api/v1/health` | saúde (público) |
+
+Exemplo (o "contrato" do dia):
+
+```bash
+BASE=https://monitor.sua-clinica.com.br
+KEY=sk_monitor_xxx
+
+# 1) o agente lê o dia
+curl -s -H "X-API-Key: $KEY" "$BASE/api/v1/digest?date=$(date +%F)&format=text" > digest.txt
+
+# 2) grava a análise de uma conversa
+curl -s -X POST "$BASE/api/v1/analyses" -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"chat_jid":"5511999999999@s.whatsapp.net","classification":"lead_quente","summary":"Pediu valor e fechou sexta 15h.","score":92,"agent":"claude-code"}'
+
+# 3) publica o relatório
+curl -s -X POST "$BASE/api/v1/reports" -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d "{\"period_start\":\"$(date +%F)\",\"title\":\"Relatório do dia\",\"body_md\":\"## Resumo\\n\\n- 12 conversas\",\"idempotency_key\":\"daily-$(date +%F)\"}"
+```
+
+## Conectando o seu agente
+
+1. Gere uma chave: `openssl rand -hex 24` e coloque em `API_KEYS`
+   (`claude:rw:<chave>,grok:ro:<chave>`).
+2. Dê ao agente o texto de [`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md) como
+   instrução (ou aponte para `GET /api/v1/contract`).
+3. Rode o exemplo completo:
+
+```bash
+export MONITOR_URL=https://monitor.sua-clinica.com.br
+export MONITOR_API_KEY=sk_monitor_xxx
+export LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-xxx LLM_MODEL=claude-sonnet-4-5
+python examples/agent_claude.py --date 2026-11-05 --dry-run   # ensaio
+python examples/agent_claude.py --date 2026-11-05             # publica
+```
+
+4. Agende no que preferir: cron do seu servidor, GitHub Actions, um serviço
+   "Cron" do próprio Easypanel ou a ferramenta de agendamento do seu agente.
+
+Para Grok/xAI basta trocar para `LLM_PROVIDER=openai`,
+`OPENAI_BASE_URL=https://api.x.ai/v1`, `OPENAI_API_KEY=xai-...`, `LLM_MODEL=grok-4`.
+
+## Variáveis de ambiente
+
+Detalhes e defaults em [`.env.example`](.env.example).
+
+| variável | padrão | para quê |
+|---|---|---|
+| `GOWA_URL` | `http://gowa-server:3000` | endereço do GOWA (rede interna do Easypanel) |
+| `GOWA_BASIC_AUTH` | — | `usuario:senha` do `APP_BASIC_AUTH` do GOWA |
+| `GOWA_DEVICE_ID` | — | slot multi-device (vazio = descobre em `/devices`) |
+| `GOWA_WEBHOOK_SECRET` | — | valida `X-Hub-Signature-256` do webhook |
+| `API_KEYS` | — | `nome:escopo:chave,...` (`rw`/`ro`) |
+| `DASHBOARD_PASSWORD` | — | Basic Auth do painel (vazio = painel aberto) |
+| `DATABASE_PATH` | `/data/monitor.db` | SQLite (precisa estar no volume) |
+| `TIMEZONE` | `America/Sao_Paulo` | fuso dos relatórios e do "dia" |
+| `SYNC_INTERVAL_MINUTES` | `15` | sincronização automática (0 desliga) |
+| `SYNC_WINDOW_DAYS` | `3` | janela puxada do histórico a cada sync |
+| `DIGEST_MAX_CHARS` | `60000` | orçamento de contexto do digest |
+| `LOG_LEVEL` | `INFO` | verbosidade |
+
+## Como os dados entram
+
+1. **Tempo real** — GOWA envia cada `message` para `POST /wa-hook` (assinado);
+   o monitor grava com dedup por `msg_uid`.
+2. **Histórico** — a cada `SYNC_INTERVAL_MINUTES` (e no boot) o monitor lista
+   `/chats` e puxa `/chat/{jid}/messages` dos últimos `SYNC_WINDOW_DAYS` dias.
+   Isso recupera o que chegou com o monitor fora do ar.
+3. **Manual** — botão "Sincronizar agora" no painel ou `POST /api/v1/sync`.
+
+Dedup é por `msg_uid` (`gowa:<id da mensagem>`), então webhook + histórico não
+duplicam.
+
+## Testes
+
+```bash
+pip install -r requirements.txt
+python scripts/smoke_test.py
+```
+
+O script cria um SQLite temporário, popula 2 conversas, sobe a app com
+`TestClient` e valida 43 pontos: auth (`ro`/`rw`/401/403), digest, transcrições,
+upsert de análise, idempotência de relatório, painel HTML (markdown sanitizado),
+webhook assinado/duplicado e contrato.
+
+## Operação
+
+- **Logs**: tabela `api_calls` (chamadas de escrita da API) e `sync_runs`
+  (cada sincronização com contagem). Visíveis em `/status`.
+- **Backup**: `sqlite3 /data/monitor.db ".backup '/data/backup.db'"` e também o
+  volume `/app/storages` do GOWA (perder = desemparelhar o WhatsApp).
+- **Retenção**: o banco cresce ~1 MB por mil mensagens; para limpar conversas
+  antigas use SQL direto (`DELETE FROM messages WHERE local_date < ...`).
+- **Multi-device**: vários números no GOWA; o monitor sincroniza todos os slots
+  `logged_in` e guarda `device_id` em cada mensagem.
+
+## Segurança
+
+- `/api/v1` exige API key (escopo `ro` só lê; `rw` escreve).
+- Painel protegido por Basic Auth quando `DASHBOARD_PASSWORD` está definido —
+  obrigatório, pois há dados de pacientes.
+- Webhook validado por HMAC (rejeita POST forjado de terceiros).
+- Markdown dos relatórios é sanitizado com `nh3` antes de renderizar (o conteúdo
+  vem de um agente externo).
+- Todas as chamadas de escrita da API ficam auditadas em `api_calls`.
+
+## Aviso
+
+GOWA é um cliente **não oficial** do WhatsApp. Usar pode levar ao bloqueio do
+número. Use um número dedicado da clínica, respeite os limites de envio e não
+faça disparo em massa. Os dados de conversas são sensíveis: mantenha o painel
+atrás de senha/HTTPS e trate conforme a LGPD.
+
+## Roadmap sugerido
+
+- Relatórios semanais/mensais agregados (`kind: weekly` já é aceito pela API).
+- Envio automático do relatório por e-mail/WhatsApp ao gestor às 19h.
+- Postgres em vez de SQLite se passar de ~1 M mensagens.
+- Múltiplas clínicas (tenant por `device_id`) com escopo de chave por tenant.

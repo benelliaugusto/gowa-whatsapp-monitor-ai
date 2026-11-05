@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% set page = 'relatorios' %}
+{% block title %}{{ relatorio.title }} &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ relatorio.title }}</h1>
+    <p class="muted">
+      {{ relatorio.period_start|data_br }}{% if relatorio.period_end != relatorio.period_start %} &ndash; {{ relatorio.period_end|data_br }}{% endif %}
+      &middot; {{ relatorio.kind }} &middot; {{ relatorio.agent or 'IA' }}{% if relatorio.model %} ({{ relatorio.model }}){% endif %}
+      &middot; <span class="badge {{ 'badge-ok' if relatorio.status == 'published' else 'badge-pending' }}">{{ relatorio.status }}</span>
+    </p>
+  </div>
+  <div class="row-actions">
+    {% if relatorio.status != 'published' %}
+    <form method="post" action="/admin/relatorio/{{ relatorio.id }}/publicar">
+      <button class="btn btn-primary" type="submit">Publicar</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-ghost" href="/relatorios">&larr; Relatórios</a>
+  </div>
+</div>
+
+{% if relatorio.summary %}
+<div class="card summary-card"><p>{{ relatorio.summary }}</p></div>
+{% endif %}
+
+{% if relatorio.metrics %}
+<section class="card">
+  <header class="card-head"><h2>Métricas</h2></header>
+  <div class="metrics">
+    {% for chave, valor in relatorio.metrics.items() %}
+      <div class="metric"><span class="label">{{ chave }}</span><strong>{{ valor }}</strong></div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card prose">{{ relatorio.body_md|md|safe }}</section>
+
+{% if relatorio.highlights %}
+<section class="card">
+  <header class="card-head"><h2>Destaques</h2></header>
+  <ul class="bullets">{% for item in relatorio.highlights %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if relatorio.action_items %}
+<section class="card">
+  <header class="card-head"><h2>Ações recomendadas</h2></header>
+  <ol class="bullets">{% for item in relatorio.action_items %}<li>{{ item }}</li>{% endfor %}</ol>
+</section>
+{% endif %}
+
+<p class="muted small">
+  Criado em {{ relatorio.created_at|datahora_br }}
+  {% if relatorio.updated_at != relatorio.created_at %}&middot; atualizado em {{ relatorio.updated_at|datahora_br }}{% endif %}
+</p>
+{% endblock %}

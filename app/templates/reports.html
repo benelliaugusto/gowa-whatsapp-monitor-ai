@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% set page = 'relatorios' %}
+{% block title %}Relatórios &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Relatórios</h1>
+    <p class="muted">{{ total }} relatório(s) no período</p>
+  </div>
+  <form class="date-form" method="get" action="/relatorios">
+    <select name="kind" aria-label="Tipo">
+      <option value="">todos os tipos</option>
+      <option value="daily" {{ 'selected' if kind == 'daily' else '' }}>daily</option>
+      <option value="weekly" {{ 'selected' if kind == 'weekly' else '' }}>weekly</option>
+      <option value="custom" {{ 'selected' if kind == 'custom' else '' }}>custom</option>
+    </select>
+    <button class="btn btn-ghost" type="submit">Filtrar</button>
+  </form>
+</div>
+
+<section class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Período</th><th>Título</th><th>Tipo</th><th>Status</th><th>Agente</th></tr>
+      </thead>
+      <tbody>
+        {% for r in relatorios %}
+        <tr>
+          <td class="muted">
+            {{ r.period_start|data_br }}{% if r.period_end != r.period_start %} &ndash; {{ r.period_end|data_br }}{% endif %}
+          </td>
+          <td><a href="/relatorios/{{ r.id }}">{{ r.title }}</a></td>
+          <td><span class="tag">{{ r.kind }}</span></td>
+          <td><span class="badge {{ 'badge-ok' if r.status == 'published' else 'badge-pending' }}">{{ r.status }}</span></td>
+          <td class="muted small">{{ r.agent or '—' }}{% if r.model %}<br>{{ r.model }}{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">Nenhum relatório ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% set page = 'status' %}
+{% block title %}Status &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Status e diagnóstico</h1>
+    <p class="muted">Conexões, banco e sincronizações</p>
+  </div>
+  <form method="post" action="/admin/sincronizar">
+    <button class="btn btn-primary" type="submit">Sincronizar agora</button>
+  </form>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <header class="card-head"><h2>GOWA</h2></header>
+    <dl class="kv">
+      <dt>URL</dt><dd><code>{{ gowa.url }}</code></dd>
+      <dt>Alcançável</dt>
+      <dd><span class="badge {{ 'badge-ok' if gowa.reachable else 'badge-danger' }}">{{ 'sim' if gowa.reachable else 'não' }}</span></dd>
+      <dt>Versão</dt><dd>{{ gowa.version or '—' }}</dd>
+      <dt>Devices</dt><dd>{{ gowa.devices }}</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <header class="card-head"><h2>Banco</h2></header>
+    <dl class="kv">
+      <dt>Arquivo</dt><dd><code>{{ resumo.database_path }}</code></dd>
+      <dt>Mensagens</dt><dd>{{ resumo.messages }}</dd>
+      <dt>Conversas</dt><dd>{{ resumo.conversations }}</dd>
+      <dt>Análises</dt><dd>{{ resumo.analyses }}</dd>
+      <dt>Relatórios</dt><dd>{{ resumo.reports }}</dd>
+      <dt>Janela</dt>
+      <dd>{{ resumo.first_message_at|datahora_br or '—' }} &rarr; {{ resumo.last_message_at|datahora_br or '—' }}</dd>
+    </dl>
+  </section>
+</div>
+
+<section class="card">
+  <header class="card-head"><h2>Configuração efetiva</h2></header>
+  <dl class="kv">
+    <dt>Sync automático</dt>
+    <dd>{{ 'ativo' if sync_enabled else 'desligado' }} (a cada {{ sync_minutos }} min, janela de {{ sync_dias }} dia(s))</dd>
+    <dt>Painel protegido</dt>
+    <dd>{{ 'sim' if painel_protegido else 'não — defina DASHBOARD_PASSWORD' }}</dd>
+    <dt>Webhook assinado</dt>
+    <dd>{{ 'sim' if webhook_protegido else 'não — defina GOWA_WEBHOOK_SECRET' }}</dd>
+    <dt>API exige chave</dt>
+    <dd>{{ 'sim' if require_api_key else 'não' }}</dd>
+    <dt>Chaves cadastradas</dt>
+    <dd>
+      {% if chaves %}
+        {% for c in chaves %}<span class="tag">{{ c.nome }} ({{ c.escopo }})</span> {% endfor %}
+      {% else %}
+        <span class="badge badge-danger">nenhuma</span>
+      {% endif %}
+    </dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header class="card-head"><h2>Últimas sincronizações</h2></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Início</th><th>Gatilho</th><th class="num">Conversas</th><th class="num">Lidas</th><th class="num">Novas</th><th>Resultado</th></tr></thead>
+      <tbody>
+        {% for s in syncs %}
+        <tr>
+          <td class="muted">{{ s.started_at|datahora_br }}</td>
+          <td><span class="tag">{{ s.trigger }}</span></td>
+          <td class="num">{{ s.chats_scanned }}</td>
+          <td class="num">{{ s.messages_fetched }}</td>
+          <td class="num">{{ s.messages_inserted }}</td>
+          <td>
+            {% if s.ok %}<span class="badge badge-ok">ok</span>
+            {% else %}<span class="badge badge-danger" title="{{ s.detail or '' }}">falhou</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">Nenhuma sincronização registrada.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

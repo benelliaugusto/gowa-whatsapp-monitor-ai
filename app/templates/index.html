@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% set page = 'painel' %}
+{% block title %}Painel &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+{% if ok is not none %}
+  <div class="flash {{ 'flash-ok' if ok else 'flash-warn' }}">
+    <strong>Sincronização {{ 'concluída' if ok else 'com falhas' }}:</strong>
+    {{ ins or 0 }} mensagem(ns) nova(s).
+    {% if erro %}<span class="flash-detail">{{ erro }}</span>{% endif %}
+  </div>
+{% endif %}
+
+{% set total_analises = stats.classifications|sum(attribute='total') if stats.classifications else 0 %}
+
+<div class="page-head">
+  <div>
+    <h1>Painel do gestor</h1>
+    <p class="muted">{{ dia|data_br }} &middot; {{ stats.conversations }} conversa(s) com movimento</p>
+  </div>
+  <div class="row-actions">
+    <form class="date-form" method="get" action="/">
+      <input type="date" name="date" value="{{ dia }}" aria-label="Dia">
+      <button class="btn btn-ghost" type="submit">Ver dia</button>
+    </form>
+    <form method="post" action="/admin/sincronizar">
+      <button class="btn btn-primary" type="submit">Sincronizar agora</button>
+    </form>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi">
+    <span class="kpi-label">Mensagens</span>
+    <strong>{{ stats.messages }}</strong>
+    <span class="kpi-sub">{{ stats.inbound }} recebidas &middot; {{ stats.outbound }} enviadas</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Conversas</span>
+    <strong>{{ stats.conversations }}</strong>
+    <span class="kpi-sub">{{ stats.new_conversations }} nova(s) no dia</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Análises da IA</span>
+    <strong>{{ total_analises }}</strong>
+    <span class="kpi-sub">de {{ stats.conversations }} conversas</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Relatórios</span>
+    <strong>{{ stats.reports }}</strong>
+    <span class="kpi-sub">publicados no período</span>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <header class="card-head">
+      <h2>Conversas do dia</h2>
+      <span class="muted small">{{ conversas|length }} conversa(s)</span>
+    </header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr><th>Contato</th><th class="num">Msgs</th><th>Última</th><th>Análise</th></tr>
+        </thead>
+        <tbody>
+          {% for c in conversas %}
+          <tr>
+            <td>
+              <a class="conv-link" href="/conversas/{{ c.chat_jid|urlencode }}?date={{ dia }}">
+                <span class="avatar">{{ (c.name or c.phone or c.chat_jid)[:1]|upper }}</span>
+                <span class="conv-meta">
+                  <strong>{{ c.name or c.phone or c.chat_jid }}</strong>
+                  <small>{{ (c.phone or '')|phone }}{% if c.is_group %} &middot; grupo{% endif %}</small>
+                </span>
+              </a>
+            </td>
+            <td class="num">{{ c.message_count }}</td>
+            <td class="muted">{{ c.last_message_at|curto }}</td>
+            <td>
+              {% if c.classification %}
+                <span class="badge {{ c.classification|badge }}">{{ c.classification }}</span>
+                {% if c.score is not none %}<span class="score">{{ c.score }}</span>{% endif %}
+              {% else %}
+                <span class="badge badge-pending">sem análise</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty">Nenhuma conversa com mensagens neste dia.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <aside class="stack">
+    <section class="card">
+      <header class="card-head"><h2>Último relatório</h2></header>
+      {% if relatorio %}
+        <h3 class="report-title"><a href="/relatorios/{{ relatorio.id }}">{{ relatorio.title }}</a></h3>
+        <p class="muted small">
+          {{ relatorio.period_start|data_br }}{% if relatorio.period_end != relatorio.period_start %} &ndash; {{ relatorio.period_end|data_br }}{% endif %}
+          &middot; {{ relatorio.kind }} &middot; {{ relatorio.agent or 'IA' }}
+        </p>
+        {% if relatorio.summary %}<p class="small">{{ relatorio.summary }}</p>{% endif %}
+        <a class="btn btn-ghost" href="/relatorios">Ver todos</a>
+      {% else %}
+        <p class="empty small">Nenhum relatório ainda. O agente de IA publica via <code>POST /api/v1/reports</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <header class="card-head"><h2>Sincronização</h2></header>
+      {% if sync %}
+        <p class="small">
+          Última: {{ sync.started_at|datahora_br }}
+          &middot; <span class="badge {{ 'badge-ok' if sync.ok else 'badge-danger' }}">{{ 'ok' if sync.ok else 'falhou' }}</span>
+        </p>
+        <p class="small muted">
+          {{ sync.messages_inserted }} nova(s) de {{ sync.messages_fetched }} lida(s)
+          em {{ sync.chats_scanned }} conversa(s)
+        </p>
+      {% else %}
+        <p class="empty small">Nenhuma sincronização registrada.</p>
+      {% endif %}
+      <a class="btn btn-ghost" href="/status">Ver status</a>
+    </section>
+  </aside>
+</div>
+{% endblock %}

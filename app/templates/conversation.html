@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set page = 'painel' %}
+{% block title %}{{ contato.name or telefone }} &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="chat-ident">
+    <span class="avatar avatar-lg">{{ (contato.name or telefone or '?')[:1]|upper }}</span>
+    <div>
+      <h1>{{ contato.name or contato.phone or jid }}</h1>
+      <p class="muted">
+        {{ telefone|phone }} &middot; {{ jid }}{% if contato.is_group %} &middot; grupo{% endif %}
+        &middot; {{ total }} mensagem(ns)
+      </p>
+    </div>
+  </div>
+  <div class="row-actions">
+    <form class="date-form" method="get" action="/conversas/{{ jid|urlencode }}">
+      <input type="date" name="date" value="{{ dia }}" aria-label="Dia">
+      <button class="btn btn-ghost" type="submit">Ver dia</button>
+    </form>
+    <a class="btn btn-ghost" href="/conversas/{{ jid|urlencode }}/transcript.txt?date={{ dia }}">Transcrição .txt</a>
+    <a class="btn btn-ghost" href="/">&larr; Painel</a>
+  </div>
+</div>
+
+{% if analise %}
+<section class="card card-analysis">
+  <header class="card-head">
+    <h2>Análise da IA</h2>
+    <span class="badge {{ analise.classification|badge }}">{{ analise.classification or 'sem classificação' }}</span>
+  </header>
+  <div class="analysis-grid">
+    <div><span class="label">Resumo</span><p>{{ analise.summary or '—' }}</p></div>
+    <div><span class="label">Próximo passo</span><p>{{ analise.next_step or '—' }}</p></div>
+    <div><span class="label">Sentimento / intenção</span><p>{{ analise.sentiment or '—' }} &middot; {{ analise.intent or '—' }}</p></div>
+    <div><span class="label">Score</span><p>{{ analise.score if analise.score is not none else '—' }}</p></div>
+  </div>
+  {% if analise.risk_flags %}
+    <div class="tags">{% for flag in analise.risk_flags %}<span class="tag">{{ flag }}</span>{% endfor %}</div>
+  {% endif %}
+  <p class="muted small">
+    Agente: {{ analise.agent or '—' }}{% if analise.model %} &middot; {{ analise.model }}{% endif %}
+    &middot; atualizado em {{ analise.updated_at|datahora_br }}
+  </p>
+</section>
+{% else %}
+<div class="flash flash-warn">
+  Sem análise para este dia. O agente de IA grava via <code>POST /api/v1/analyses</code>.
+</div>
+{% endif %}
+
+<section class="chat">
+  {% for m in mensagens %}
+    <div class="bubble {{ 'out' if m.direction == 'out' else 'in' }}">
+      <div class="bubble-text">{{ m.body }}</div>
+      <div class="bubble-time">{{ m.sent_at|hhmm }}</div>
+    </div>
+  {% else %}
+    <p class="empty">Nenhuma mensagem registrada para este período.</p>
+  {% endfor %}
+</section>
+{% endblock %}

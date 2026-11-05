@@ -1,0 +1,44 @@
+# docker-compose para desenvolvimento local (ou como referência para o Easypanel).
+# No Easypanel o normal é criar DOIS serviços "App": gowa-server e monitor-ia.
+services:
+  gowa:
+    image: aldinokemal2104/go-whatsapp-web-multidevice:v9.8.0
+    restart: unless-stopped
+    environment:
+      APP_BASIC_AUTH: ${GOWA_BASIC_AUTH:-admin:changeme}
+      APP_PORT: "3000"
+      TZ: UTC
+      WHATSAPP_WEBHOOK: http://monitor-ia:8000/wa-hook
+      WHATSAPP_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET:-}
+      WHATSAPP_WEBHOOK_EVENTS: "message"
+    volumes:
+      - gowa_storages:/app/storages
+      - gowa_statics:/app/statics
+    ports:
+      - "3000:3000"
+
+  monitor-ia:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - gowa
+    environment:
+      TIMEZONE: America/Sao_Paulo
+      DATABASE_PATH: /data/monitor.db
+      GOWA_URL: http://gowa:3000
+      GOWA_BASIC_AUTH: ${GOWA_BASIC_AUTH:-admin:changeme}
+      GOWA_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET:-}
+      API_KEYS: ${API_KEYS:-claude:rw:troque-esta-chave}
+      DASHBOARD_USER: ${DASHBOARD_USER:-gestor}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-troque-esta-senha}
+      SYNC_INTERVAL_MINUTES: "15"
+      SYNC_WINDOW_DAYS: "3"
+    volumes:
+      - monitor_data:/data
+    ports:
+      - "8000:8000"
+
+volumes:
+  gowa_storages:
+  gowa_statics:
+  monitor_data:
