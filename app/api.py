@@ -39,8 +39,13 @@ from .schemas import (
 from .schemas import (
     AgentRunIn,
     AgentRunOut,
+    FunnelOut,
+    LeadEventOut,
     NotifyIn,
     NotifyOut,
+    SeriesPoint,
+    StageIn,
+    StageOut,
     TaskIn,
     TaskOut,
     TaskPatch,
@@ -377,6 +382,11 @@ def save_analysis(payload: AnalysisIn) -> AnalysisOut:
     data["chat_jid"] = jid
     data["analysis_date"] = dia
     row = db.upsert_analysis(data)
+    if payload.stage:
+        try:
+            db.set_lead_stage(jid, payload.stage, source=payload.agent or "agent")
+        except ValueError:
+            pass
     return AnalysisOut(**row)
 
 
@@ -664,3 +674,55 @@ def create_agent_run(payload: AgentRunIn) -> AgentRunOut:
 )
 def list_agent_runs(limit: int = Query(default=10, ge=1, le=100)) -> list[AgentRunOut]:
     return [AgentRunOut(**row) for row in db.recent_agent_runs(limit)]
+
+# ---------------------------------------------------------------------------
+# funil de leads
+# ---------------------------------------------------------------------------
+@router.patch(
+    "/conversations/{chat_jid}/stage",
+    response_model=StageOut,
+    dependencies=[Depends(require_write_key)],
+    summary="Move o lead no funil (novo, qualificado, agendado, atendido, fechado, perdido)",
+)
+def set_stage(chat_jid: str, payload: StageIn) -> StageOut:
+    jid = normalize_jid(chat_jid)
+    if not db.has_messages(jid):
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Conversa nao encontrada"})
+    return StageOut(**db.set_lead_stage(jid, payload.stage, payload.source or "manual"))
+
+
+@router.get(
+    "/conversations/{chat_jid}/stage",
+    dependencies=[Depends(require_api_key)],
+    summary="Estágio atual do lead e histórico de mudanças",
+)
+def get_stage(chat_jid: str) -> dict[str, Any]:
+    jid = normalize_jid(chat_jid)
+    return {
+        "chat_jid": jid,
+        "current": db.get_lead_stage(jid),
+        "history": [LeadEventOut(**row).model_dump() for row in db.lead_events(jid, 50)],
+    }
+
+
+@router.get(
+    "/funnel",
+    response_model=FunnelOut,
+    dependencies=[Depends(require_api_key)],
+    summary="Funil de leads com conversão",
+)
+def funnel(date: str | None = Query(default=None, description="Dia (opcional): só conversas com mensagens nele")) -> FunnelOut:
+    return FunnelOut(**db.funnel_metrics(resolve_date(date) if date else None))
+
+
+# ---------------------------------------------------------------------------
+# tendências
+# ---------------------------------------------------------------------------
+@router.get(
+    "/stats/series",
+    response_model=list[SeriesPoint],
+    dependencies=[Depends(require_api_key)],
+    summary="Série diária (mensagens, conversas e novas conversas)",
+)
+def stats_series(days: int = Query(default=30, ge=1, le=180)) -> list[SeriesPoint]:
+    return [SeriesPoint(**row) for row in db.daily_series(days)]

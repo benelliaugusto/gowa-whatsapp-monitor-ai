@@ -22,6 +22,11 @@ Configuração (variáveis de ambiente):
     OPENAI_BASE_URL=https://api.x.ai/v1
     LLM_MODEL=grok-4
 
+> O caminho recomendado hoje é o runner oficial do projeto:
+> `python -m app.agent --date AAAA-MM-DD --notify` (mesma lógica, com tarefas,
+> funil e métricas de atendimento). Este arquivo continua útil para rodar o agente
+> fora do container ou como referência de integração.
+
 Uso:
     python examples/agent_claude.py                    # hoje
     python examples/agent_claude.py --date 2026-11-05

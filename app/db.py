@@ -773,6 +773,24 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     report_id   INTEGER,
     detail      TEXT
 );
+
+CREATE TABLE IF NOT EXISTS lead_stages (
+    chat_jid   TEXT PRIMARY KEY,
+    stage      TEXT NOT NULL,
+    source     TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lead_stages_stage ON lead_stages (stage);
+
+CREATE TABLE IF NOT EXISTS lead_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_jid       TEXT NOT NULL,
+    stage          TEXT NOT NULL,
+    previous_stage TEXT,
+    source         TEXT,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lead_events_chat ON lead_events (chat_jid, created_at);
 """
 
 _MESSAGE_COLUMNS = {
@@ -1037,3 +1055,186 @@ def recent_sync_failures(limit: int = 2) -> int:
     with connect() as conn:
         rows = conn.execute("SELECT ok FROM sync_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return sum(1 for r in rows if not r["ok"])
+
+# ---------------------------------------------------------------------------
+# funil de leads
+# ---------------------------------------------------------------------------
+LEAD_STAGES = ("novo", "qualificado", "agendado", "atendido", "fechado", "perdido")
+
+
+def set_lead_stage(chat_jid: str, stage: str, source: str = "agent") -> dict:
+    """Move o lead de estágio (grava histórico quando muda)."""
+    stage = (stage or "").strip().lower()
+    if stage not in LEAD_STAGES:
+        raise ValueError(f"estagio invalido: {stage}")
+    agora = utc_now_iso()
+    with transaction() as conn:
+        atual = conn.execute("SELECT stage FROM lead_stages WHERE chat_jid = ?", (chat_jid,)).fetchone()
+        anterior = atual["stage"] if atual else None
+        conn.execute(
+            """INSERT INTO lead_stages (chat_jid, stage, source, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(chat_jid) DO UPDATE SET
+                   stage = excluded.stage, source = excluded.source, updated_at = excluded.updated_at""",
+            (chat_jid, stage, source, agora),
+        )
+        if anterior != stage:
+            conn.execute(
+                """INSERT INTO lead_events (chat_jid, stage, previous_stage, source, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (chat_jid, stage, anterior, source, agora),
+            )
+    return {"chat_jid": chat_jid, "stage": stage, "source": source, "updated_at": agora, "previous_stage": anterior}
+
+
+def get_lead_stage(chat_jid: str) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM lead_stages WHERE chat_jid = ?", (chat_jid,)).fetchone())
+
+
+def lead_events(chat_jid: str, limit: int = 50) -> list[dict]:
+    with connect() as conn:
+        return _rows(
+            conn.execute(
+                "SELECT * FROM lead_events WHERE chat_jid = ? ORDER BY id DESC LIMIT ?",
+                (chat_jid, limit),
+            ).fetchall()
+        )
+
+
+def funnel_metrics(date_str: str | None = None) -> dict:
+    """Contagem por estágio (opcionalmente só conversas com mensagens no dia)."""
+    with connect() as conn:
+        if date_str:
+            linhas = conn.execute(
+                """SELECT s.stage AS stage, COUNT(*) AS total
+                     FROM lead_stages s
+                    WHERE s.chat_jid IN (SELECT DISTINCT chat_jid FROM messages WHERE local_date = ?)
+                    GROUP BY s.stage""",
+                (date_str,),
+            ).fetchall()
+        else:
+            linhas = conn.execute(
+                "SELECT stage, COUNT(*) AS total FROM lead_stages GROUP BY stage"
+            ).fetchall()
+        total_com_estagio = sum(row["total"] for row in linhas)
+        sem_estagio = conn.execute(
+            """SELECT COUNT(DISTINCT chat_jid) FROM messages
+                WHERE (? IS NULL OR local_date = ?)
+                  AND chat_jid NOT IN (SELECT chat_jid FROM lead_stages)""",
+            (date_str, date_str),
+        ).fetchone()[0]
+
+    contagem = {stage: 0 for stage in LEAD_STAGES}
+    for row in linhas:
+        if row["stage"] in contagem:
+            contagem[row["stage"]] = row["total"]
+    base = total_com_estagio + sem_estagio
+    convertidos = contagem["agendado"] + contagem["atendido"] + contagem["fechado"]
+    return {
+        "stages": contagem,
+        "sem_estagio": sem_estagio,
+        "total": base,
+        "conversion": round(100 * convertidos / base, 1) if base else 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# séries temporais
+# ---------------------------------------------------------------------------
+def daily_series(days: int = 30) -> list[dict]:
+    """Mensagens/conversas por dia (para o gráfico de tendência)."""
+    days = max(1, min(int(days), 180))
+    with connect() as conn:
+        linhas = conn.execute(
+            """SELECT local_date AS dia,
+                      COUNT(*) AS mensagens,
+                      COUNT(DISTINCT chat_jid) AS conversas
+                 FROM messages
+                WHERE local_date >= date('now', :janela)
+                GROUP BY local_date
+                ORDER BY dia""",
+            {"janela": f"-{days} days"},
+        ).fetchall()
+        novas = conn.execute(
+            """SELECT dia, COUNT(*) AS total FROM (
+                   SELECT chat_jid, MIN(local_date) AS dia FROM messages GROUP BY chat_jid
+               ) WHERE dia >= date('now', :janela) GROUP BY dia""",
+            {"janela": f"-{days} days"},
+        ).fetchall()
+
+    por_dia = {row["dia"]: dict(row) for row in linhas}
+    for row in novas:
+        por_dia.setdefault(row["dia"], {"dia": row["dia"], "mensagens": 0, "conversas": 0})
+        por_dia[row["dia"]]["novas_conversas"] = row["total"]
+    return [
+        {
+            "date": valor["dia"],
+            "messages": valor.get("mensagens", 0),
+            "conversations": valor.get("conversas", 0),
+            "new_conversations": valor.get("novas_conversas", 0),
+        }
+        for _, valor in sorted(por_dia.items())
+    ]
+
+
+# ---------------------------------------------------------------------------
+# busca/filtros no painel
+# ---------------------------------------------------------------------------
+def search_conversations(
+    *,
+    date_str: str | None = None,
+    query: str | None = None,
+    stage: str | None = None,
+    only_unanswered: bool = False,
+    include_groups: bool = True,
+    limit: int = 200,
+) -> list[dict]:
+    filtros, params = ["1 = 1"], {"limit": limit, "dia": date_str or ""}
+    if date_str:
+        filtros.append("m.local_date = :dia")
+    if query:
+        filtros.append("(c.name LIKE :busca OR c.phone LIKE :busca OR m.chat_jid LIKE :busca)")
+        params["busca"] = f"%{query.strip()}%"
+    if stage:
+        filtros.append("s.stage = :stage")
+        params["stage"] = stage
+    if not include_groups:
+        filtros.append("m.chat_jid NOT LIKE '%@g.us'")
+
+    tendo = ""
+    if only_unanswered:
+        tendo = """
+        HAVING SUM(CASE WHEN m.direction = 'in' THEN 1 ELSE 0 END) > 0
+           AND MAX(CASE WHEN m.direction = 'in' THEN m.sent_at END)
+               > COALESCE(MAX(CASE WHEN m.direction = 'out' THEN m.sent_at END), '')"""
+
+    sql = f"""
+    SELECT m.chat_jid AS chat_jid,
+           COALESCE(c.name, '')  AS name,
+           COALESCE(c.phone, '') AS phone,
+           COALESCE(c.is_group, CASE WHEN m.chat_jid LIKE '%@g.us' THEN 1 ELSE 0 END) AS is_group,
+           COUNT(*) AS message_count,
+           SUM(CASE WHEN m.direction = 'in' THEN 1 ELSE 0 END) AS inbound,
+           SUM(CASE WHEN m.direction = 'out' THEN 1 ELSE 0 END) AS outbound,
+           MIN(m.sent_at) AS first_message_at,
+           MAX(m.sent_at) AS last_message_at,
+           (SELECT x.body FROM messages x WHERE x.chat_jid = m.chat_jid
+             AND (:dia = '' OR x.local_date = :dia) ORDER BY x.sent_at DESC LIMIT 1) AS last_preview,
+           a.classification AS classification,
+           a.sentiment AS sentiment,
+           a.score AS score,
+           a.summary AS analysis_summary,
+           s.stage AS stage
+      FROM messages m
+      LEFT JOIN contacts c ON c.chat_jid = m.chat_jid
+      LEFT JOIN analyses a ON a.chat_jid = m.chat_jid AND a.analysis_date = :dia
+      LEFT JOIN lead_stages s ON s.chat_jid = m.chat_jid
+     WHERE {' AND '.join(filtros)}
+     GROUP BY m.chat_jid
+     {tendo}
+     ORDER BY last_message_at DESC
+     LIMIT :limit
+    """
+    with connect() as conn:
+        return _rows(conn.execute(sql, params).fetchall())

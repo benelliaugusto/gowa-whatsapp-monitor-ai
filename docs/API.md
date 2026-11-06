@@ -45,6 +45,9 @@ cru com `GOWA_WEBHOOK_SECRET`).
 | GET | `/api/v1/tasks` | tarefas (`status`, `owner`, `limit`) |
 | GET | `/api/v1/transcriptions/stats` | fila de transcrição por status |
 | GET | `/api/v1/agent-runs` | últimas execuções do agente |
+| GET | `/api/v1/stats/series` | série diária (tendências) |
+| GET | `/api/v1/funnel` | funil de leads + conversão |
+| GET | `/api/v1/conversations/{jid}/stage` | estágio atual + histórico |
 
 ### Escrita
 
@@ -59,6 +62,7 @@ cru com `GOWA_WEBHOOK_SECRET`).
 | POST | `/api/v1/transcriptions/run` | transcreve áudios pendentes |
 | POST | `/api/v1/notify/manager` | envia resumo do dia ao gestor (WhatsApp) |
 | POST | `/api/v1/agent-runs` | registra execução do agente (cron) |
+| PATCH | `/api/v1/conversations/{jid}/stage` | move o lead no funil |
 
 ### Webhook
 
@@ -218,6 +222,24 @@ curl -s -H "X-API-Key: sk_xxx" "https://monitor.exemplo.com/api/v1/agent-runs"
 
 > `GET /api/v1/stats/daily` e `GET /api/v1/digest` agora trazem `atendimento`
 > (tempo de 1ª resposta, % respondidas, sem resposta +24h, contato fora do horário).
+
+### Funil e tendências
+
+```bash
+# mover o lead no funil
+curl -s -X PATCH "https://monitor.exemplo.com/api/v1/conversations/5511999999999%40s.whatsapp.net/stage" \
+  -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" \
+  -d '{"stage":"agendado","source":"manual"}'
+
+# funil do dia + conversão
+curl -s -H "X-API-Key: sk_xxx" "https://monitor.exemplo.com/api/v1/funnel?date=2026-11-05"
+
+# série dos últimos 30 dias
+curl -s -H "X-API-Key: sk_xxx" "https://monitor.exemplo.com/api/v1/stats/series?days=30"
+```
+
+Estágios: `novo`, `qualificado`, `agendado`, `atendido`, `fechado`, `perdido`.
+`POST /api/v1/analyses` aceita o campo opcional `stage` e atualiza o funil sozinho.
 
 ## Códigos de erro
 

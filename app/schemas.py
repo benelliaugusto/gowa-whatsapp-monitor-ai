@@ -88,6 +88,9 @@ class AnalysisIn(BaseModel):
     extra: dict[str, Any] | None = Field(default=None, description="Campo livre para dados adicionais")
     agent: str | None = Field(default=None, description="Agente que gerou a análise: claude-code, grok, n8n...")
     model: str | None = Field(default=None, description="Modelo usado: claude-sonnet-4.5, grok-4...")
+    stage: Literal["novo", "qualificado", "agendado", "atendido", "fechado", "perdido"] | None = Field(
+        default=None, description="Estágio do lead no funil (atualiza o funil automaticamente)"
+    )
 
 
 class AnalysisOut(AnalysisIn):
@@ -291,3 +294,41 @@ class AgentRunOut(BaseModel):
     analyses: int = 0
     report_id: int | None = None
     detail: str | None = None
+
+# ---------------------------------------------------------------------------
+# funil e tendências
+# ---------------------------------------------------------------------------
+class StageIn(BaseModel):
+    stage: Literal["novo", "qualificado", "agendado", "atendido", "fechado", "perdido"]
+    source: str | None = Field(default=None, description="agent | painel | manual")
+
+
+class StageOut(BaseModel):
+    chat_jid: str
+    stage: str
+    source: str | None = None
+    updated_at: str
+    previous_stage: str | None = None
+
+
+class LeadEventOut(BaseModel):
+    id: int
+    chat_jid: str
+    stage: str
+    previous_stage: str | None = None
+    source: str | None = None
+    created_at: str
+
+
+class FunnelOut(BaseModel):
+    stages: dict[str, int] = Field(default_factory=dict)
+    sem_estagio: int = 0
+    total: int = 0
+    conversion: float = 0.0
+
+
+class SeriesPoint(BaseModel):
+    date: str
+    messages: int = 0
+    conversations: int = 0
+    new_conversations: int = 0

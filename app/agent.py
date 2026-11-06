@@ -7,10 +7,15 @@ Execução (serviço Cron do Easypanel):
 Variáveis de ambiente:
     MONITOR_API_URL   (padrão http://127.0.0.1:8000)
     MONITOR_API_KEY   (chave com escopo rw)
-    LLM_PROVIDER      anthropic | openai  (padrão anthropic)
-    LLM_API_KEY       chave do provedor
-    LLM_MODEL         ex.: claude-sonnet-4-5 / grok-4
-    LLM_BASE_URL      só para openai-compatible (padrão https://api.openai.com/v1)
+    LLM_PROVIDER      anthropic | openai | opencode (padrão anthropic)
+    LLM_API_KEY       chave do provedor (no OpenCode: chave do Console/Go)
+    LLM_MODEL         ex.: claude-sonnet-4-5 / grok-4 / deepseek-v4.1-flash
+    LLM_BASE_URL      sobrescreve a URL (padrão https://api.openai.com/v1;
+                      opencode usa https://opencode.ai/inference/go)
+
+OpenCode Go (assinatura) também é suportado: use LLM_PROVIDER=opencode com a chave
+do Console. O agente envia User-Agent próprio e o header x-opencode-session, como o
+gateway exige, e registra o custo reportado em usage.cost.
 
 Fluxo:
     GET  /api/v1/digest          -> conversas do dia em texto
@@ -37,9 +42,45 @@ import httpx
 MONITOR_URL = os.getenv("MONITOR_API_URL", "http://127.0.0.1:8000").rstrip("/")
 MONITOR_KEY = os.getenv("MONITOR_API_KEY", "")
 PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
-MODEL = os.getenv("LLM_MODEL", "").strip() or ("claude-sonnet-4-5" if PROVIDER == "anthropic" else "grok-4")
+_MODELOS_PADRAO = {
+    "anthropic": "claude-sonnet-4-5",
+    "openai": "grok-4",
+    "opencode": "deepseek-v4.1-flash",
+    "opencode-go": "deepseek-v4.1-flash",
+}
+MODEL = os.getenv("LLM_MODEL", "").strip() or _MODELOS_PADRAO.get(PROVIDER, "claude-sonnet-4-5")
 LLM_KEY = os.getenv("LLM_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/") or "https://api.openai.com/v1"
+
+# OpenCode Go/Console: gateway compatível com OpenAI em /inference/go (assinatura Go)
+# ou /inference (pay-as-you-go). Requer User-Agent próprio e x-opencode-session estável.
+OPENCODE_BASE = os.getenv("LLM_BASE_URL", "").rstrip("/") or "https://opencode.ai/inference/go"
+USER_AGENT = os.getenv(
+    "LLM_USER_AGENT",
+    "monitor-ia-agent/2.1 (+https://github.com/benelliaugusto/gowa-whatsapp-monitor-ai)",
+)
+SESSION_ID = os.getenv("OPENCODE_SESSION_ID", "").strip() or f"monitor-ia-{date_cls.today().isoformat()}"
+SISTEMA = "Voce e um analista de conversas de clinica. Responda SEMPRE apenas JSON valido, sem markdown."
+
+_CUSTO_TOTAL = 0.0
+
+
+def custo_total() -> float:
+    return _CUSTO_TOTAL
+
+
+def _registrar_custo(dados: dict) -> None:
+    """Acumula o custo reportado pelo gateway (usage.cost ou opencode.list_cost)."""
+    global _CUSTO_TOTAL
+    try:
+        uso = dados.get("usage") or {}
+        valor = uso.get("cost")
+        if valor is None:
+            valor = (uso.get("opencode") or {}).get("list_cost")
+        if valor:
+            _CUSTO_TOTAL += float(valor)
+    except (TypeError, ValueError, AttributeError):
+        pass
 LOTE_CHARS = int(os.getenv("AGENT_BATCH_CHARS", "24000"))
 MAX_TAREFAS = int(os.getenv("AGENT_MAX_TASKS", "10"))
 
@@ -51,7 +92,8 @@ SCHEMA_ANALISE = """{
   "summary": "1 a 3 frases objetivas, sem inventar",
   "next_step": "acao concreta com quem/quando",
   "risk_flags": ["reclamacao", "urgencia", "risco_abandono", "no_show"],
-  "score": 0
+  "score": 0,
+  "stage": "novo | qualificado | agendado | atendido | fechado | perdido"
 }"""
 
 
@@ -87,6 +129,31 @@ def postar(cliente: httpx.Client, caminho: str, payload: dict, timeout: int = 60
 def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
     if not LLM_KEY:
         raise SystemExit("defina LLM_API_KEY (ou ANTHROPIC_API_KEY / OPENAI_API_KEY)")
+    if PROVIDER in {"opencode", "opencode-go", "opencode_go"}:
+        resposta = httpx.post(
+            f"{OPENCODE_BASE}/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {LLM_KEY}",
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+                "x-opencode-session": SESSION_ID,
+            },
+            json={
+                "model": MODEL,
+                "max_tokens": max_tokens,
+                "temperature": 0.2,
+                "messages": [
+                    {"role": "system", "content": SISTEMA},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+            timeout=300,
+        )
+        if resposta.status_code >= 400:
+            raise RuntimeError(f"OpenCode respondeu {resposta.status_code}: {resposta.text[:500]}")
+        dados = resposta.json()
+        _registrar_custo(dados)
+        return (dados.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     if PROVIDER == "anthropic":
         resposta = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -119,6 +186,7 @@ def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
     if resposta.status_code >= 400:
         raise RuntimeError(f"LLM respondeu {resposta.status_code}: {resposta.text[:500]}")
     dados = resposta.json()
+    _registrar_custo(dados)
     if PROVIDER == "anthropic":
         blocos = dados.get("content") or []
         return "".join(b.get("text", "") for b in blocos if isinstance(b, dict))
@@ -152,6 +220,9 @@ Regras:
 - score 0-100 = temperatura comercial.
 - summary: no maximo 3 frases. next_step: acao concreta e verificavel.
 - Se for spam/sem interesse: classification="spam" e score baixo.
+- stage = estagio atual do lead no funil: "novo" (acabou de chegar), "qualificado"
+  (demonstrou interesse real), "agendado" (horario marcado), "atendido" (ja passou
+  pela consulta), "fechado" (tratamento fechado), "perdido" (desistiu/nao respondeu).
 
 Responda SOMENTE JSON no formato: {{"analyses": [ ... ]}}
 
@@ -160,11 +231,12 @@ CONVERSAS:
 """
 
 
-def prompt_relatorio(dia: str, analises: list[dict], totais: dict) -> str:
+def prompt_relatorio(dia: str, analises: list[dict], totais: dict, atendimento: dict | None = None) -> str:
     return f"""Voce e analista de dados de uma clinica. Com base nas analises do dia {dia},
 escreva o relatorio que o gestor vai ler no painel.
 
 Dados: {json.dumps(totais, ensure_ascii=False)}
+Atendimento: {json.dumps(atendimento or {}, ensure_ascii=False)}
 Analises: {json.dumps(analises, ensure_ascii=False)}
 
 Responda SOMENTE este JSON:
@@ -247,7 +319,12 @@ def main() -> int:
                 return 1
 
             log("gerando relatorio...")
-            relatorio = extrair_json(chamar_llm(prompt_relatorio(dia, analises, totais), max_tokens=6000))
+            relatorio = extrair_json(
+                chamar_llm(
+                    prompt_relatorio(dia, analises, totais, digest.get("attendance")),
+                    max_tokens=6000,
+                )
+            )
             relatorio.setdefault("kind", "daily")
             relatorio["period_start"] = dia
             relatorio["period_end"] = dia
@@ -304,6 +381,8 @@ def main() -> int:
 
             ok = True
             detalhe = f"{len(analises)} analises"
+            if custo_total():
+                detalhe += f" | custo US$ {custo_total():.4f}"
     except Exception as exc:  # noqa: BLE001 - sempre registra a execução
         detalhe = f"{type(exc).__name__}: {exc}"[:500]
         log(f"ERRO: {detalhe}")

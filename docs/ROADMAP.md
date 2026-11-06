@@ -4,10 +4,12 @@
 > análise diária por conversa e relatório. Este documento prioriza o que aumenta o
 > valor real do sistema — não o que é tecnicamente mais bonito.
 
-> **Status (nov/2026): Fase 0 entregue.** Transcrição local de áudio, tarefas
-> acionáveis, agente em cron (`python -m app.agent`), aviso por WhatsApp ao gestor,
-> métricas de atendimento (1ª resposta, sem resposta +24h, fora do horário) e
-> backup automático. Próximo passo: Fase 1 (funil e tendências).
+> **Status (nov/2026): Fases 0 e 1 entregues.** Transcrição local de áudio, tarefas
+> acionáveis, agente em cron (`python -m app.agent`, com suporte a Anthropic, OpenAI
+> e OpenCode Go), aviso por WhatsApp ao gestor, métricas de atendimento, backup
+> automático, **funil de leads com histórico e conversão**, **tendências de 14 dias**
+> e **busca/filtros no painel**. Próximo passo: Fase 2 (alertas em tempo real,
+> follow-up sugerido e no-show).
 
 ## 1. Onde estamos (inventário honesto)
 

@@ -24,6 +24,29 @@
   </div>
 </div>
 
+<section class="card">
+  <header class="card-head">
+    <h2>Funil</h2>
+    <span class="tag">{{ estagio.stage if estagio else 'sem estágio' }}</span>
+  </header>
+  <form class="date-form" method="post" action="/admin/conversa/{{ jid|urlencode }}/estagio">
+    <input type="hidden" name="date" value="{{ dia }}">
+    <select name="stage" aria-label="Novo estágio">
+      {% for e in estagios %}
+        <option value="{{ e }}" {{ 'selected' if estagio and estagio.stage == e else '' }}>{{ e }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-primary" type="submit">Mover no funil</button>
+  </form>
+  {% if historico %}
+    <div class="tags">
+      {% for h in historico[:8] %}
+        <span class="tag">{{ h.stage }} · {{ h.created_at|datahora_br }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
 {% if analise %}
 <section class="card card-analysis">
   <header class="card-head">

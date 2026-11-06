@@ -114,7 +114,8 @@ Uma análise por conversa por dia (upsert).
   "score": 92,
   "extra": {"procedimento": "limpeza de pele", "valor_citado": 180},
   "agent": "claude-code",
-  "model": "claude-sonnet-4-5"
+  "model": "claude-sonnet-4-5",
+  "stage": "agendado"
 }
 ```
 
@@ -128,6 +129,9 @@ Campos:
 - `intent`: `agendamento`, `duvida_preco`, `remarcacao`, `cancelamento`,
   `informacao`, `pos_consulta`, `outro`.
 - `score`: 0–100 (temperatura do lead).
+- `stage`: estágio no funil (`novo`, `qualificado`, `agendado`, `atendido`,
+  `fechado`, `perdido`). Preencher sempre que possível — é o que alimenta o funil
+  e a taxa de conversão no painel.
 - `risk_flags`: ex. `reclamacao`, `urgencia`, `risco_abandono`, `no_show`.
 - `agent`/`model`: identificação de quem gerou (auditoria).
 
@@ -198,6 +202,9 @@ Regras:
 | `/api/v1/sync/runs`                              | GET    | histórico de sincronizações                         |
 | `/api/v1/health`                                 | GET    | saúde (público, sem key)                            |
 | `/api/v1/tasks`                                  | GET/POST/PATCH | pendências acionáveis                       |
+| `/api/v1/funnel`                                 | GET    | funil de leads e conversão                           |
+| `/api/v1/stats/series?days=30`                   | GET    | tendência diária                                     |
+| `/api/v1/conversations/{jid}/stage`              | GET/PATCH | estágio do lead + histórico                      |
 | `/api/v1/transcriptions/stats`                   | GET    | fila de transcrição de áudio                        |
 | `/api/v1/agent-runs`                             | GET/POST | histórico de execuções do agente                  |
 | `/api/v1/notify/manager`                         | POST   | envia resumo ao gestor pelo WhatsApp                |

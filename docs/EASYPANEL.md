@@ -244,6 +244,8 @@ LLM_PROVIDER=anthropic
 LLM_API_KEY=<chave do provedor>
 LLM_MODEL=claude-sonnet-4-5
 # Grok/xAI: LLM_PROVIDER=openai, LLM_BASE_URL=https://api.x.ai/v1, LLM_MODEL=grok-4
+# OpenCode Go: LLM_PROVIDER=opencode, LLM_MODEL=deepseek-v4.1-flash,
+#              LLM_BASE_URL=https://opencode.ai/inference/go (chave do Console)
 MANAGER_WHATSAPP=5511999999999
 ```
 

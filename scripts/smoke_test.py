@@ -317,6 +317,41 @@ def main() -> int:
         db.init_db()
         check("init_db idempotente (migração)", db.pending_tasks_count() >= 0)
 
+        print("\n[10] fase 1: funil, séries e busca")
+        jid_maria = "5511988887777@s.whatsapp.net"
+        check("GET funil", cliente.get("/api/v1/funnel", headers=RO).status_code == 200)
+        resposta = cliente.patch(
+            f"/api/v1/conversations/{jid_maria}/stage",
+            headers=RW,
+            json={"stage": "agendado", "source": "teste"},
+        )
+        check("PATCH stage", resposta.status_code == 200 and resposta.json()["stage"] == "agendado", resposta.text[:200])
+        check(
+            "estágio inválido -> 422",
+            cliente.patch(f"/api/v1/conversations/{jid_maria}/stage", headers=RW, json={"stage": "xpto"}).status_code == 422,
+        )
+        detalhe = cliente.get(f"/api/v1/conversations/{jid_maria}/stage", headers=RO).json()
+        check("GET stage com histórico", detalhe["current"]["stage"] == "agendado" and len(detalhe["history"]) >= 1, str(detalhe)[:200])
+        funil = cliente.get(f"/api/v1/funnel?date={dia}", headers=RO).json()
+        check("funil conta agendado", funil["stages"].get("agendado", 0) >= 1, str(funil))
+        check("funil com total e conversão", funil["total"] >= 1 and "conversion" in funil)
+
+        serie = cliente.get("/api/v1/stats/series?days=7", headers=RO)
+        check("GET stats/series", serie.status_code == 200 and len(serie.json()) >= 1, serie.text[:200])
+        check("série com mensagens", any(p["messages"] > 0 for p in serie.json()))
+
+        painel2 = cliente.get(f"/?date={dia}")
+        check("painel com funil", "Funil de leads" in painel2.text)
+        check("painel com gráfico", "Últimos 14 dias" in painel2.text)
+        busca = cliente.get(f"/?date={dia}&q=Maria")
+        check("busca por nome no painel", "Maria Silva" in busca.text and "Joao Souza" not in busca.text, busca.text[:200])
+        check("filtro sem resposta responde", cliente.get(f"/?date={dia}&sem_resposta=1").status_code == 200)
+
+        resposta = cliente.post("/api/v1/analyses", headers=RW, json={**analise, "stage": "atendido"})
+        check("análise com stage", resposta.status_code == 200, resposta.text[:200])
+        funil2 = cliente.get("/api/v1/funnel", headers=RO).json()
+        check("funil atualizado pela análise", funil2["stages"].get("atendido", 0) >= 1, str(funil2))
+
         print("\n[8] contrato para o agente")
         resposta = cliente.get("/api/v1/contract", headers=RO)
         check("GET /api/v1/contract", resposta.status_code == 200 and len(resposta.text) > 200)

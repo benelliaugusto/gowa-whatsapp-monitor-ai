@@ -38,11 +38,15 @@ def _ctx(request: Request, **extra) -> dict:
 def painel(
     request: Request,
     date: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    stage: str | None = Query(default=None),
+    sem_resposta: int | None = Query(default=None),
     ok: int | None = Query(default=None),
     ins: int | None = Query(default=None),
     erro: str | None = Query(default=None),
 ) -> HTMLResponse:
     dia = resolve_date(date)
+    filtro_estagio = stage if stage in db.LEAD_STAGES else None
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -50,7 +54,17 @@ def painel(
             request,
             dia=dia,
             stats=db.daily_stats(dia),
-            conversas=db.conversations_for_date(dia, include_groups=True, limit=500),
+            conversas=db.search_conversations(
+                date_str=dia,
+                query=q,
+                stage=filtro_estagio,
+                only_unanswered=bool(sem_resposta),
+                limit=500,
+            ),
+            funil=db.funnel_metrics(dia),
+            serie=db.daily_series(14),
+            estagios=db.LEAD_STAGES,
+            filtros={"q": q or "", "stage": filtro_estagio or "", "sem_resposta": bool(sem_resposta)},
             relatorio=db.latest_report(),
             sync=db.last_sync_run(),
             atendimento=db.attendance_metrics(dia),
@@ -81,6 +95,9 @@ def conversa(request: Request, chat_jid: str, date: str | None = Query(default=N
             contato=contato,
             mensagens=mensagens,
             analise=db.get_analysis(jid, dia),
+            estagio=db.get_lead_stage(jid),
+            historico=db.lead_events(jid, 20),
+            estagios=db.LEAD_STAGES,
             telefone=contato.get("phone") or phone_from_jid(jid),
             total=len(mensagens),
         ),
@@ -176,3 +193,15 @@ def publicar(report_id: int) -> RedirectResponse:
 def concluir_tarefa(task_id: int, date: str | None = Form(default=None)) -> RedirectResponse:
     db.update_task(task_id, {"status": "done"})
     return RedirectResponse(url=f"/?date={date}" if date else "/", status_code=303)
+
+@router.post("/admin/conversa/{chat_jid}/estagio")
+def definir_estagio(
+    chat_jid: str,
+    stage: str = Form(...),
+    date: str | None = Form(default=None),
+) -> RedirectResponse:
+    db.set_lead_stage(normalize_jid(chat_jid), stage, source="painel")
+    destino = f"/conversas/{quote(chat_jid, safe='')}"
+    if date:
+        destino += f"?date={date}"
+    return RedirectResponse(url=destino, status_code=303)

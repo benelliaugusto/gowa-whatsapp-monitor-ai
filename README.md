@@ -114,7 +114,10 @@ Documentação completa: [`docs/API.md`](docs/API.md) · contrato do agente:
 | GET | `/api/v1/digest?date=YYYY-MM-DD&format=text` | conversas do dia em texto pronto para o LLM |
 | GET | `/api/v1/conversations/{jid}/transcript?date=` | transcrição de uma conversa |
 | GET | `/api/v1/conversations?date=` | lista com contadores |
-| GET | `/api/v1/stats/daily?date=` | KPIs do dia |
+| GET | `/api/v1/stats/daily?date=` | KPIs do dia + métricas de atendimento |
+| GET | `/api/v1/stats/series?days=30` | série diária para tendências |
+| GET | `/api/v1/funnel?date=` | funil de leads com conversão |
+| PATCH | `/api/v1/conversations/{jid}/stage` | move o lead no funil (com histórico) |
 | POST | `/api/v1/analyses` | upsert da análise de uma conversa no dia |
 | POST | `/api/v1/reports` | publica o relatório do gestor (idempotente) |
 | PATCH | `/api/v1/reports/{id}` | atualiza/despublica |
@@ -168,6 +171,31 @@ python examples/agent_claude.py --date 2026-11-05             # publica
 Para Grok/xAI basta trocar para `LLM_PROVIDER=openai`,
 `LLM_BASE_URL=https://api.x.ai/v1`, `LLM_API_KEY=xai-...`, `LLM_MODEL=grok-4`.
 
+**OpenCode Go/Console** (assinatura ou pay-as-you-go) também funciona — é um gateway
+compatível com OpenAI/Anthropic:
+
+```bash
+LLM_PROVIDER=opencode
+LLM_API_KEY=<chave do Console>
+LLM_MODEL=deepseek-v4.1-flash     # ou glm-5.3-flash, claude-haiku-5-5, kimi-k3...
+LLM_BASE_URL=https://opencode.ai/inference/go   # padrão do agente; use /inference no pay-as-you-go
+```
+
+O agente envia `User-Agent` próprio e o header `x-opencode-session` (exigidos pelo
+gateway para Go) e soma o custo reportado em `usage.cost` no registro da execução.
+
+### Painel: funil, tendências e busca
+
+O painel do gestor agora mostra: KPIs do dia, **funil de leads** (`novo`,
+`qualificado`, `agendado`, `atendido`, `fechado`, `perdido`) com taxa de conversão,
+**gráfico dos últimos 14 dias**, cartão de **atendimento** (1ª resposta, % respondidas,
+sem resposta +24h, fora do horário), **pendências** com botão de concluir, busca por
+nome/telefone e filtros por estágio e "sem resposta". Na página da conversa há um
+seletor para mover o lead no funil e o histórico de mudanças.
+
+O estágio é atualizado automaticamente pelo agente (`stage` na análise) ou
+manualmente (`PATCH /api/v1/conversations/{jid}/stage`).
+
 ### Automação no Easypanel (dois serviços Cron)
 
 O monitor já roda dentro da imagem: use a **mesma imagem/repositório** em serviços
@@ -218,7 +246,7 @@ Detalhes e defaults em [`.env.example`](.env.example).
 | `BUSINESS_HOURS_START/END` | `08:00`/`18:00` | horário comercial para as métricas |
 | `MANAGER_WHATSAPP` | — | número do gestor para os avisos (só dígitos com DDI) |
 | `BACKUP_DIR` / `BACKUP_KEEP` | `/data/backups` / `14` | backup automático do banco |
-| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` | — | provedor do agente em cron |
+| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` | — | provedor do agente em cron (inclui `opencode`) |
 | `LOG_LEVEL` | `INFO` | verbosidade |
 
 ## Como os dados entram
@@ -241,10 +269,10 @@ python scripts/smoke_test.py
 ```
 
 O script cria um SQLite temporário, popula 2 conversas, sobe a app com
-`TestClient` e valida 63 pontos: auth (`ro`/`rw`/401/403), digest, transcrições,
+`TestClient` e valida 77 pontos: auth (`ro`/`rw`/401/403), digest, transcrições,
 upsert de análise, idempotência de relatório, painel HTML (markdown sanitizado),
-webhook assinado/duplicado, tarefas, métricas de atendimento, fila de transcrição
-e telemetria do agente.
+webhook assinado/duplicado, tarefas, métricas de atendimento, fila de transcrição,
+telemetria do agente, funil de leads, séries e busca/filtros.
 
 ## Operação
 

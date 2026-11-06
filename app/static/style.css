@@ -202,3 +202,15 @@ code {
   .bubble { max-width: 88%; }
   .conv-meta strong { max-width: 150px; }
 }
+/* funil, busca e sparkline */
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.date-form input[type="search"] { min-width: 180px; }
+.funnel { display: flex; flex-direction: column; gap: 8px; }
+.funnel-row { display: grid; grid-template-columns: 110px 1fr 36px; gap: 10px; align-items: center; font-size: 13px; }
+.funnel-label { color: var(--muted); font-weight: 600; }
+.funnel-bar { height: 10px; background: #f1f5f9; border-radius: 999px; overflow: hidden; }
+.funnel-bar span { display: block; height: 100%; background: linear-gradient(90deg, #0d9488, #10b981); border-radius: 999px; }
+.funnel-value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.spark { display: flex; align-items: flex-end; gap: 4px; height: 120px; padding-top: 8px; }
+.spark-col { flex: 1; display: flex; align-items: flex-end; height: 100%; background: #f1f5f9; border-radius: 6px; overflow: hidden; }
+.spark-col span { display: block; width: 100%; background: linear-gradient(180deg, #10b981, #0d9488); border-radius: 6px; min-height: 2px; }

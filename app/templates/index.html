@@ -21,7 +21,17 @@
   <div class="row-actions">
     <form class="date-form" method="get" action="/">
       <input type="date" name="date" value="{{ dia }}" aria-label="Dia">
-      <button class="btn btn-ghost" type="submit">Ver dia</button>
+      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar nome ou telefone" aria-label="Busca">
+      <select name="stage" aria-label="Estágio do funil">
+        <option value="">funil: todos</option>
+        {% for e in estagios %}
+          <option value="{{ e }}" {{ 'selected' if filtros.stage == e else '' }}>{{ e }}</option>
+        {% endfor %}
+      </select>
+      <label class="check">
+        <input type="checkbox" name="sem_resposta" value="1" {{ 'checked' if filtros.sem_resposta else '' }}> sem resposta
+      </label>
+      <button class="btn btn-ghost" type="submit">Filtrar</button>
     </form>
     <form method="post" action="/admin/sincronizar">
       <button class="btn btn-primary" type="submit">Sincronizar agora</button>
@@ -50,6 +60,48 @@
     <strong>{{ stats.reports }}</strong>
     <span class="kpi-sub">publicados no período</span>
   </div>
+</div>
+
+<div class="grid-2" style="margin-bottom:18px">
+  <section class="card">
+    <header class="card-head">
+      <h2>Funil de leads</h2>
+      <span class="muted small">conversão {{ funil.conversion }}%</span>
+    </header>
+    {% set maior = (funil.stages.values()|max) if funil.stages else 1 %}
+    <div class="funnel">
+      {% for nome, total in funil.stages.items() %}
+      <div class="funnel-row">
+        <span class="funnel-label">{{ nome }}</span>
+        <div class="funnel-bar">
+          <span style="width: {{ (100 * total / (maior if maior > 0 else 1))|round(1) }}%"></span>
+        </div>
+        <span class="funnel-value">{{ total }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted small">
+      {{ funil.total }} conversa(s) no período · {{ funil.sem_estagio }} sem estágio definido
+    </p>
+  </section>
+
+  <section class="card">
+    <header class="card-head">
+      <h2>Últimos 14 dias</h2>
+      <span class="muted small">mensagens por dia</span>
+    </header>
+    {% set pico = (serie|map(attribute='messages')|max) if serie else 1 %}
+    <div class="spark">
+      {% for ponto in serie %}
+        <div class="spark-col" title="{{ ponto.date }}: {{ ponto.messages }} mensagens · {{ ponto.conversations }} conversas">
+          <span style="height: {{ ((ponto.messages / (pico if pico > 0 else 1)) * 100)|round(1) }}%"></span>
+        </div>
+      {% else %}
+        <p class="empty small">Sem dados ainda.</p>
+      {% endfor %}
+    </div>
+    <p class="muted small">Cada barra é um dia; passe o mouse para ver os números.</p>
+  </section>
 </div>
 
 {% if atendimento %}
@@ -118,7 +170,7 @@
     <div class="table-wrap">
       <table class="table">
         <thead>
-          <tr><th>Contato</th><th class="num">Msgs</th><th>Última</th><th>Análise</th></tr>
+          <tr><th>Contato</th><th class="num">Msgs</th><th>Última</th><th>Análise</th><th>Funil</th></tr>
         </thead>
         <tbody>
           {% for c in conversas %}
@@ -142,9 +194,16 @@
                 <span class="badge badge-pending">sem análise</span>
               {% endif %}
             </td>
+            <td>
+              {% if c.stage %}
+                <span class="tag">{{ c.stage }}</span>
+              {% else %}
+                <span class="muted small">—</span>
+              {% endif %}
+            </td>
           </tr>
           {% else %}
-          <tr><td colspan="4" class="empty">Nenhuma conversa com mensagens neste dia.</td></tr>
+          <tr><td colspan="5" class="empty">Nenhuma conversa com mensagens neste dia.</td></tr>
           {% endfor %}
         </tbody>
       </table>
