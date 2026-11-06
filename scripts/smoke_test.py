@@ -304,6 +304,9 @@ def main() -> int:
 
         aviso = cliente.post("/api/v1/notify/manager", headers=RW, json={"day": dia})
         check("aviso sem MANAGER_WHATSAPP -> 422", aviso.status_code == 422, aviso.text[:200])
+        aviso = cliente.post("/api/v1/notify/manager", headers=RW, json={"phone": "55DDDSEUNUMERO"})
+        check("telefone invalido -> 422 com dica", aviso.status_code == 422 and "MANAGER_WHATSAPP" in aviso.text, aviso.text[:200])
+        check("health informa notify", "notify" in cliente.get("/api/v1/health").json())
 
         run = cliente.post(
             "/api/v1/agent-runs",

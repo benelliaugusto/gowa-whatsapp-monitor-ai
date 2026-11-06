@@ -74,6 +74,14 @@ Autenticação: header X-API-Key ou Authorization: Bearer <chave>.
 """
 
 
+def _manager_valido() -> bool:
+    try:
+        notify.validar_telefone(settings.manager_whatsapp)
+        return True
+    except ValueError:
+        return False
+
+
 def _contract_text() -> str:
     candidates = [
         Path(__file__).resolve().parent.parent / "docs" / "AGENT_PROMPT.md",
@@ -107,6 +115,11 @@ async def health() -> HealthOut:
             "interval_minutes": settings.sync_interval_minutes,
             "window_days": settings.sync_window_days,
             "last_run": db.last_sync_run(),
+        },
+        notify={
+            "manager_configured": bool(settings.manager_whatsapp),
+            "manager_valid": _manager_valido(),
+            "manager_masked": notify.mascarar_telefone(settings.manager_whatsapp),
         },
     )
 

@@ -3,11 +3,35 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from . import db
 from .config import settings
-from .gowa import get_gowa_client
+from .gowa import GowaError, get_gowa_client
 from .timeutil import fmt_date_br, resolve_date
+
+
+def normalizar_telefone(valor: str | None) -> str:
+    """Deixa só dígitos: '+55 (11) 99999-9999' -> '5511999999999'."""
+    return re.sub(r"\D", "", valor or "")
+
+
+def validar_telefone(valor: str | None) -> str:
+    """Valida o número do gestor e devolve a mensagem de erro que o operador precisa ver."""
+    digitos = normalizar_telefone(valor)
+    if len(digitos) < 10 or len(digitos) > 15:
+        raise ValueError(
+            f"telefone invalido ({valor or 'vazio'}): use o numero real com DDI e apenas digitos, "
+            "ex.: 5511999999999 (variavel MANAGER_WHATSAPP)"
+        )
+    return digitos
+
+
+def mascarar_telefone(valor: str | None) -> str:
+    digitos = normalizar_telefone(valor)
+    if len(digitos) < 6:
+        return ""
+    return f"{digitos[:4]}****{digitos[-4:]}"
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +63,21 @@ async def enviar_resumo(
     texto: str | None = None,
 ) -> dict:
     """Envia o resumo para MANAGER_WHATSAPP (ou para o telefone informado)."""
-    telefone = (phone or settings.manager_whatsapp or "").strip()
-    if not telefone:
+    bruto = (phone or settings.manager_whatsapp or "").strip()
+    if not bruto:
         raise ValueError("MANAGER_WHATSAPP nao configurado e nenhum telefone foi informado")
+    telefone = validar_telefone(bruto)
     corpo = texto or resumo_do_dia(date_str)
-    resultado = await get_gowa_client().send_text(telefone, corpo)
-    log.info("resumo enviado ao gestor (%s)", telefone)
+    try:
+        resultado = await get_gowa_client().send_text(telefone, corpo)
+    except GowaError as exc:
+        if getattr(exc, "status_code", None) == 400:
+            raise ValueError(
+                f"o GOWA nao reconhece o numero {mascarar_telefone(telefone)} no WhatsApp. "
+                "Confira MANAGER_WHATSAPP: precisa ser o numero real com DDI (ex.: 5511999999999)."
+            ) from exc
+        raise
+    log.info("resumo enviado ao gestor (%s)", mascarar_telefone(telefone))
     return {
         "ok": True,
         "phone": telefone,

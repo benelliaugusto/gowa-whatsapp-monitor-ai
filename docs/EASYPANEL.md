@@ -246,6 +246,9 @@ LLM_MODEL=claude-sonnet-4-5
 # Grok/xAI: LLM_PROVIDER=openai, LLM_BASE_URL=https://api.x.ai/v1, LLM_MODEL=grok-4
 # OpenCode Go: LLM_PROVIDER=opencode, LLM_MODEL=deepseek-v4.1-flash,
 #              LLM_BASE_URL=https://opencode.ai/inference/go (chave do Console)
+# gateways oscilam: retry + fallback de modelo
+LLM_MAX_RETRIES=3
+LLM_FALLBACK_MODELS=glm-5.3-flash
 MANAGER_WHATSAPP=5511999999999
 ```
 
@@ -295,5 +298,7 @@ Guarde também o volume do GOWA (`/app/storages`): perdê-lo desemparelha o núm
 | chegou mensagem mas o painel está vazio | sincronização ainda não rodou | botão "Sincronizar agora" ou `POST /api/v1/sync` |
 | `/api/v1/*` sempre 401 | `API_KEYS` vazio ou header errado | definir `API_KEYS` e enviar `X-API-Key` |
 | painel abre mas dados somem no deploy | volume não montado em `/data` | criar o volume e redeployar |
+| aviso ao gestor 502 `INVALID_JID` | `MANAGER_WHATSAPP` com placeholder (`55DDDSEUNUMERO`) ou número sem WhatsApp | usar o número real, só dígitos com DDI (ex.: `5511999999999`); confira em `/api/v1/health` → `notify.manager_valid` |
+| agente falha com 429 `overloaded` | upstream do gateway saturado | já há retry+fallback; se persistir, troque `LLM_MODEL` para `glm-5.3-flash` |
 | datas erradas | fuso | `TIMEZONE=America/Sao_Paulo` no monitor; GOWA em UTC (padrão) |
 | 502 em `/api/v1/sync` | GOWA fora do ar ou senha errada | ver logs/`/app/info` do GOWA |

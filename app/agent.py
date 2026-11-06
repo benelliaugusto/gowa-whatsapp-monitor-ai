@@ -31,8 +31,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
+import time
 from datetime import date as date_cls
 from datetime import datetime
 from typing import Any
@@ -60,6 +62,11 @@ USER_AGENT = os.getenv(
     "monitor-ia-agent/2.1 (+https://github.com/benelliaugusto/gowa-whatsapp-monitor-ai)",
 )
 SESSION_ID = os.getenv("OPENCODE_SESSION_ID", "").strip() or f"monitor-ia-{date_cls.today().isoformat()}"
+LLM_MAX_TENTATIVAS = max(1, int(os.getenv("LLM_MAX_RETRIES", "3")))
+_fallbacks = [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
+if not _fallbacks and PROVIDER in {"opencode", "opencode-go", "opencode_go"}:
+    _fallbacks = ["glm-5.3-flash"]
+FALLBACK_MODELS = _fallbacks
 SISTEMA = "Voce e um analista de conversas de clinica. Responda SEMPRE apenas JSON valido, sem markdown."
 
 _CUSTO_TOTAL = 0.0
@@ -126,9 +133,11 @@ def postar(cliente: httpx.Client, caminho: str, payload: dict, timeout: int = 60
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
-def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
-    if not LLM_KEY:
-        raise SystemExit("defina LLM_API_KEY (ou ANTHROPIC_API_KEY / OPENAI_API_KEY)")
+class ErroTransitorio(RuntimeError):
+    """Falha temporária do provedor (429/5xx/rede): vale tentar novamente."""
+
+
+def _chamar_provedor(modelo: str, prompt: str, max_tokens: int) -> str:
     if PROVIDER in {"opencode", "opencode-go", "opencode_go"}:
         resposta = httpx.post(
             f"{OPENCODE_BASE}/openai/v1/chat/completions",
@@ -139,7 +148,7 @@ def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
                 "x-opencode-session": SESSION_ID,
             },
             json={
-                "model": MODEL,
+                "model": modelo,
                 "max_tokens": max_tokens,
                 "temperature": 0.2,
                 "messages": [
@@ -149,12 +158,7 @@ def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
             },
             timeout=300,
         )
-        if resposta.status_code >= 400:
-            raise RuntimeError(f"OpenCode respondeu {resposta.status_code}: {resposta.text[:500]}")
-        dados = resposta.json()
-        _registrar_custo(dados)
-        return (dados.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-    if PROVIDER == "anthropic":
+    elif PROVIDER == "anthropic":
         resposta = httpx.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -162,7 +166,7 @@ def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={"model": MODEL, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+            json={"model": modelo, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
             timeout=240,
         )
     else:
@@ -170,27 +174,60 @@ def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
             f"{BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"},
             json={
-                "model": MODEL,
+                "model": modelo,
                 "max_tokens": max_tokens,
                 "temperature": 0.2,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "Voce e um analista de conversas de clinica. Responda SEMPRE apenas JSON valido, sem markdown.",
-                    },
+                    {"role": "system", "content": SISTEMA},
                     {"role": "user", "content": prompt},
                 ],
             },
             timeout=240,
         )
+
     if resposta.status_code >= 400:
-        raise RuntimeError(f"LLM respondeu {resposta.status_code}: {resposta.text[:500]}")
+        trecho = resposta.text[:500]
+        if resposta.status_code in {408, 409, 425, 429} or resposta.status_code >= 500:
+            raise ErroTransitorio(f"{resposta.status_code}: {trecho}")
+        raise RuntimeError(f"{resposta.status_code}: {trecho}")
+
     dados = resposta.json()
     _registrar_custo(dados)
     if PROVIDER == "anthropic":
         blocos = dados.get("content") or []
         return "".join(b.get("text", "") for b in blocos if isinstance(b, dict))
     return (dados.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+
+
+def chamar_llm(prompt: str, max_tokens: int = 8000) -> str:
+    """Chama o LLM com retry exponencial e fallback de modelos.
+
+    Gateways como o OpenCode podem devolver 429/5xx quando o upstream está
+    saturado. Tentamos de novo com backoff e, se persistir, trocamos para o
+    próximo modelo de LLM_FALLBACK_MODELS (padrão no OpenCode: glm-5.3-flash).
+    """
+    if not LLM_KEY:
+        raise SystemExit("defina LLM_API_KEY (ou ANTHROPIC_API_KEY / OPENAI_API_KEY)")
+
+    modelos = [MODEL] + [m for m in FALLBACK_MODELS if m and m != MODEL]
+    ultimo_erro: Exception | None = None
+
+    for indice, modelo in enumerate(modelos):
+        for tentativa in range(1, LLM_MAX_TENTATIVAS + 1):
+            try:
+                return _chamar_provedor(modelo, prompt, max_tokens)
+            except ErroTransitorio as exc:
+                ultimo_erro = exc
+                espera = min(60.0, (2 ** (tentativa - 1)) * 2.0 + random.uniform(0, 1.5))
+                log(
+                    f"LLM indisponivel ({exc}); tentativa {tentativa}/{LLM_MAX_TENTATIVAS} "
+                    f"em {modelo}, aguardando {espera:.0f}s"
+                )
+                if tentativa < LLM_MAX_TENTATIVAS:
+                    time.sleep(espera)
+        if indice < len(modelos) - 1:
+            log(f"trocando de modelo: {modelo} -> {modelos[indice + 1]}")
+    raise RuntimeError(f"LLM falhou em todos os modelos/tentativas: {ultimo_erro}")
 
 
 def extrair_json(texto: str) -> Any:
@@ -375,7 +412,10 @@ def main() -> int:
             if args.notify:
                 resp = postar(cliente, "/api/v1/notify/manager", {"day": dia}, timeout=60)
                 if resp.status_code >= 400:
-                    log(f"  ! aviso ao gestor falhou ({resp.status_code}): {resp.text[:200]}")
+                    dica = ""
+                    if resp.status_code == 422:
+                        dica = " (ajuste MANAGER_WHATSAPP: numero real, so digitos com DDI, ex.: 5511999999999)"
+                    log(f"  ! aviso ao gestor falhou ({resp.status_code}){dica}: {resp.text[:200]}")
                 else:
                     log("  + resumo enviado ao gestor pelo WhatsApp")
 

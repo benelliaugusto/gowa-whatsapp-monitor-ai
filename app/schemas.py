@@ -208,6 +208,7 @@ class HealthOut(BaseModel):
     database: dict[str, Any]
     gowa: dict[str, Any]
     sync: dict[str, Any]
+    notify: dict[str, Any] | None = None
 
 # ---------------------------------------------------------------------------
 # tarefas

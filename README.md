@@ -184,6 +184,12 @@ LLM_BASE_URL=https://opencode.ai/inference/go   # padrão do agente; use /infere
 O agente envia `User-Agent` próprio e o header `x-opencode-session` (exigidos pelo
 gateway para Go) e soma o custo reportado em `usage.cost` no registro da execução.
 
+Gateways sofrem com upstream saturado (HTTP 429 `overloaded`, 5xx). O agente já
+trata isso: **retry com backoff exponencial** (`LLM_MAX_RETRIES`, padrão 3) e
+**fallback de modelo** (`LLM_FALLBACK_MODELS`, no OpenCode o padrão é
+`glm-5.3-flash`). Só depois de esgotar as tentativas a execução falha — e mesmo
+assim as análises já publicadas ficam salvas.
+
 ### Painel: funil, tendências e busca
 
 O painel do gestor agora mostra: KPIs do dia, **funil de leads** (`novo`,
@@ -244,7 +250,9 @@ Detalhes e defaults em [`.env.example`](.env.example).
 | `WHISPER_MODEL` | `small` | modelo do whisper (`tiny`…`large-v3`) |
 | `WHISPER_MODEL_DIR` | `/data/models` | cache do modelo (deve ficar no volume) |
 | `BUSINESS_HOURS_START/END` | `08:00`/`18:00` | horário comercial para as métricas |
-| `MANAGER_WHATSAPP` | — | número do gestor para os avisos (só dígitos com DDI) |
+| `MANAGER_WHATSAPP` | — | número do gestor para os avisos (só dígitos com DDI, **número real que usa WhatsApp**) |
+| `LLM_MAX_RETRIES` | `3` | tentativas por modelo em caso de 429/5xx |
+| `LLM_FALLBACK_MODELS` | — | modelos alternativos separados por vírgula (OpenCode: `glm-5.3-flash`) |
 | `BACKUP_DIR` / `BACKUP_KEEP` | `/data/backups` / `14` | backup automático do banco |
 | `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` | — | provedor do agente em cron (inclui `opencode`) |
 | `LOG_LEVEL` | `INFO` | verbosidade |
