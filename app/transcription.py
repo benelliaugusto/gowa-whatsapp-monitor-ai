@@ -102,11 +102,11 @@ async def transcrever_mensagem(msg_uid: str, chat_jid: str, media_type: str = "a
     return True
 
 
-async def processar_pendentes(limit: int = 3) -> dict:
+async def processar_pendentes(limit: int = 3, incluir_ignorados: bool = False) -> dict:
     """Processa áudios pendentes (worker periódico e endpoint manual)."""
     if not settings.transcribe_enabled:
         return {"enabled": False, "processed": 0, "done": 0, "failed": 0}
-    pendentes = db.pending_transcriptions(limit)
+    pendentes = db.pending_transcriptions(limit, incluir_ignorados=incluir_ignorados)
     feitos = falhas = 0
     for item in pendentes:
         ok = await transcrever_mensagem(

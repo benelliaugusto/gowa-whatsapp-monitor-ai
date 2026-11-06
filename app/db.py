@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, Iterable, Iterator
 
 from .config import settings
-from .timeutil import iso, local_date_of, parse_ts, utc_now, utc_now_iso
+from .timeutil import iso, local_date_of, parse_ts, today_local, utc_now, utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -791,6 +791,17 @@ CREATE TABLE IF NOT EXISTS lead_events (
     created_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lead_events_chat ON lead_events (chat_jid, created_at);
+
+CREATE TABLE IF NOT EXISTS action_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    params      TEXT,
+    status      TEXT NOT NULL DEFAULT 'running',
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    output      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_action_runs_started ON action_runs (started_at);
 """
 
 _MESSAGE_COLUMNS = {
@@ -888,15 +899,23 @@ def pending_tasks_count() -> int:
 # ---------------------------------------------------------------------------
 # transcrição de áudio
 # ---------------------------------------------------------------------------
-def pending_transcriptions(limit: int = 5) -> list[dict]:
+def pending_transcriptions(limit: int = 5, incluir_ignorados: bool = False) -> list[dict]:
+    """Áudios pendentes.
+
+    Com incluir_ignorados=True também pega os marcados como 'skipped' (áudios que
+    chegaram com a transcrição desligada) — é o que o backfill manual usa.
+    """
+    status = ("pending", "skipped") if incluir_ignorados else ("pending",)
+    marcadores = ", ".join("?" for _ in status)
     with connect() as conn:
         rows = conn.execute(
-            """SELECT msg_uid, chat_jid, media_type, body, sent_at
-                 FROM messages
-                WHERE transcription_status = 'pending'
-                ORDER BY sent_at ASC
-                LIMIT ?""",
-            (limit,),
+            f"""SELECT msg_uid, chat_jid, media_type, body, sent_at
+                  FROM messages
+                 WHERE transcription_status IN ({marcadores})
+                   AND (media_type IN ('audio', 'ptt') OR msg_type IN ('audio', 'ptt'))
+                 ORDER BY sent_at ASC
+                 LIMIT ?""",
+            (*status, limit),
         ).fetchall()
     return _rows(rows)
 
@@ -986,9 +1005,9 @@ def attendance_metrics(date_str: str) -> dict:
             data = datetime.strptime(str(m["local_date"]), "%Y-%m-%d")
         except (TypeError, ValueError):
             continue
-        if data.weekday() + 1 not in {d % 7 for d in dias} and 0 not in dias:
-            fora_horario += 1
-        elif not (h_ini <= hora < h_fim):
+        # dias usa 0=domingo ... 6=sabado; weekday()+1 da 1=segunda ... 7=domingo
+        dia_semana = (data.weekday() + 1) % 7
+        if dia_semana not in dias or not (h_ini <= hora < h_fim):
             fora_horario += 1
 
     respondidas = 0
@@ -1145,22 +1164,23 @@ def funnel_metrics(date_str: str | None = None) -> dict:
 def daily_series(days: int = 30) -> list[dict]:
     """Mensagens/conversas por dia (para o gráfico de tendência)."""
     days = max(1, min(int(days), 180))
+    desde = (datetime.strptime(today_local(), "%Y-%m-%d") - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     with connect() as conn:
         linhas = conn.execute(
             """SELECT local_date AS dia,
                       COUNT(*) AS mensagens,
                       COUNT(DISTINCT chat_jid) AS conversas
                  FROM messages
-                WHERE local_date >= date('now', :janela)
+                WHERE local_date >= :desde
                 GROUP BY local_date
                 ORDER BY dia""",
-            {"janela": f"-{days} days"},
+            {"desde": desde},
         ).fetchall()
         novas = conn.execute(
             """SELECT dia, COUNT(*) AS total FROM (
                    SELECT chat_jid, MIN(local_date) AS dia FROM messages GROUP BY chat_jid
-               ) WHERE dia >= date('now', :janela) GROUP BY dia""",
-            {"janela": f"-{days} days"},
+               ) WHERE dia >= :desde GROUP BY dia""",
+            {"desde": desde},
         ).fetchall()
 
     por_dia = {row["dia"]: dict(row) for row in linhas}
@@ -1238,3 +1258,39 @@ def search_conversations(
     """
     with connect() as conn:
         return _rows(conn.execute(sql, params).fetchall())
+
+# ---------------------------------------------------------------------------
+# execuções de ações do painel (sync, transcrição, agente, backup, aviso)
+# ---------------------------------------------------------------------------
+def start_action_run(kind: str, params: dict | None = None) -> int:
+    with transaction() as conn:
+        cursor = conn.execute(
+            "INSERT INTO action_runs (kind, params, status, started_at) VALUES (?, ?, 'running', ?)",
+            (kind, json.dumps(params or {}, ensure_ascii=False), utc_now_iso()),
+        )
+    return int(cursor.lastrowid)
+
+
+def finish_action_run(run_id: int, status: str, output: str = "") -> None:
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE action_runs SET status = ?, finished_at = ?, output = ? WHERE id = ?",
+            (status, utc_now_iso(), (output or "")[:4000], run_id),
+        )
+
+
+def recent_action_runs(limit: int = 15) -> list[dict]:
+    with connect() as conn:
+        return _rows(
+            conn.execute("SELECT * FROM action_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        )
+
+
+def running_action(kind: str) -> dict | None:
+    with connect() as conn:
+        return _row(
+            conn.execute(
+                "SELECT * FROM action_runs WHERE kind = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+                (kind,),
+            ).fetchone()
+        )

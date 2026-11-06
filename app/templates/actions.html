@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set page = 'acoes' %}
+{% block title %}Ações &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+{% if agente_rodando %}<meta http-equiv="refresh" content="15">{% endif %}
+
+{% if ok %}
+  <div class="flash {{ 'flash-ok' if ok == '1' else 'flash-warn' }}">
+    Ação executada com {{ 'sucesso' if ok == '1' else 'falha' }}{% if ins %} &middot; {{ ins }} item(ns){% endif %}.
+  </div>
+{% endif %}
+{% if agendado %}<div class="flash flash-ok">Agente iniciado em background. A página atualiza sozinha em alguns segundos.</div>{% endif %}
+{% if aviso %}<div class="flash flash-ok">Resumo enviado ao gestor.</div>{% endif %}
+{% if erro %}<div class="flash flash-warn"><strong>Falhou:</strong> {{ erro }}</div>{% endif %}
+
+<div class="page-head">
+  <div>
+    <h1>Ações</h1>
+    <p class="muted">Rode cada função do monitor sem terminal</p>
+  </div>
+</div>
+
+{% include "_acoes_rapidas.html" %}
+
+<section class="card">
+  <header class="card-head">
+    <h2>Execuções recentes</h2>
+    {% if agente_rodando %}<span class="badge badge-pending">agente rodando&hellip;</span>{% endif %}
+  </header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Quando</th><th>Função</th><th>Status</th><th>Resultado</th></tr></thead>
+      <tbody>
+        {% for e in execucoes %}
+        <tr>
+          <td class="muted">{{ e.started_at|datahora_br }}</td>
+          <td><span class="tag">{{ e.kind }}</span></td>
+          <td>
+            {% if e.status == 'running' %}<span class="badge badge-pending">rodando</span>
+            {% elif e.status == 'ok' %}<span class="badge badge-ok">ok</span>
+            {% else %}<span class="badge badge-danger">erro</span>{% endif %}
+          </td>
+          <td><pre class="saida">{{ e.output or '—' }}</pre></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">Nenhuma ação executada ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">
+    Transcrição:
+    {% for status, total in transcricoes.items() %}<span class="tag">{{ status }}: {{ total }}</span> {% else %}—{% endfor %}
+    &middot; sync automático a cada {{ sync_minutos }} min &middot; backup mantém {{ backup_keep }} arquivo(s)
+  </p>
+</section>
+{% endblock %}

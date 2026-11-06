@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -354,6 +355,28 @@ def main() -> int:
         check("análise com stage", resposta.status_code == 200, resposta.text[:200])
         funil2 = cliente.get("/api/v1/funnel", headers=RO).json()
         check("funil atualizado pela análise", funil2["stages"].get("atendido", 0) >= 1, str(funil2))
+
+        print("\n[11] central de ações")
+        acoes = cliente.get("/acoes")
+        check(
+            "GET /acoes",
+            acoes.status_code == 200 and "Sincronizar WhatsApp" in acoes.text and "Rodar IA do dia" in acoes.text,
+            acoes.text[:200],
+        )
+        check("painel tem botões de ação", "Rodar IA do dia" in cliente.get(f"/?date={dia}").text)
+
+        check("POST /acoes/backup redireciona", cliente.post("/acoes/backup", follow_redirects=False).status_code == 303)
+        check("POST /acoes/transcrever", cliente.post("/acoes/transcrever", data={"limit": "5"}, follow_redirects=False).status_code == 303)
+        check("POST /acoes/sincronizar", cliente.post("/acoes/sincronizar", data={"days": "1"}, follow_redirects=False).status_code == 303)
+        check("POST /acoes/aviso", cliente.post("/acoes/aviso", data={"date": dia}, follow_redirects=False).status_code == 303)
+        check("POST /acoes/agente", cliente.post("/acoes/agente", data={"date": dia}, follow_redirects=False).status_code == 303)
+        time.sleep(1.2)
+        acoes2 = cliente.get("/acoes")
+        check(
+            "execuções registradas em /acoes",
+            all(k in acoes2.text for k in ("backup", "transcrever", "sincronizar", "agente")),
+            acoes2.text[:300],
+        )
 
         print("\n[8] contrato para o agente")
         resposta = cliente.get("/api/v1/contract", headers=RO)

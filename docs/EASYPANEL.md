@@ -108,6 +108,14 @@ MANAGER_WHATSAPP=5511999999999
 BACKUP_DIR=/data/backups
 BACKUP_KEEP=14
 
+# agente executado pelo botão "Rodar IA" do painel (roda DENTRO deste container)
+MONITOR_API_URL=http://127.0.0.1:8000
+MONITOR_API_KEY=<uma chave rw do API_KEYS>
+LLM_PROVIDER=opencode
+LLM_API_KEY=<chave do Console/OpenCode>
+LLM_MODEL=deepseek-v4.1-flash
+LLM_BASE_URL=https://opencode.ai/inference/go
+
 # API dos agentes de IA — nome:escopo:chave
 API_KEYS=claude:rw:COLE-UMA-CHAVE-LONGA-ALEATORIA,grok:ro:COLE-OUTRA-CHAVE
 
@@ -261,6 +269,12 @@ Command:  python -m app.backup --keep 14
 
 O agente registra cada execução em `/api/v1/agent-runs`, visível no painel
 (`/status`). Se o dia não tiver conversas ele não publica relatório vazio.
+
+> **Rodar IA pelo painel**: a página `/acoes` executa o mesmo agente dentro do
+> container do monitor (botão "Rodar IA do dia"). Para isso o serviço monitor
+> precisa de `MONITOR_API_URL=http://127.0.0.1:8000`, `MONITOR_API_KEY` e das
+> variáveis `LLM_*` — no Cron, por ser outro container, o host é o interno
+> (`http://<projeto>_monitor-ia:8000`).
 
 > A imagem cresce (~+250 MB) por causa do `faster-whisper`. Se não quiser
 > transcrição, defina `TRANSCRIBE_ENABLED=false` — a biblioteca continua na

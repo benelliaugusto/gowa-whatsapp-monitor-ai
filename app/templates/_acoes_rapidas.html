@@ -1,0 +1,36 @@
+<div class="actions-grid">
+  <form class="action-card" method="post" action="/acoes/sincronizar">
+    <strong>Sincronizar WhatsApp</strong>
+    <span class="muted small">Puxa o histórico recente do GOWA</span>
+    <input type="number" name="days" min="1" max="30" placeholder="dias (opcional)">
+    <button class="btn btn-primary" type="submit">Rodar</button>
+  </form>
+
+  <form class="action-card" method="post" action="/acoes/transcrever">
+    <strong>Transcrever áudios</strong>
+    <span class="muted small">Processa a fila de áudios pendentes</span>
+    <input type="number" name="limit" min="1" max="200" value="10" aria-label="Quantidade">
+    <button class="btn btn-primary" type="submit">Rodar</button>
+  </form>
+
+  <form class="action-card" method="post" action="/acoes/agente">
+    <strong>Rodar IA do dia</strong>
+    <span class="muted small">Analisa, publica relatório e cria tarefas</span>
+    <input type="date" name="date" value="{{ dia }}" aria-label="Dia">
+    <label class="check"><input type="checkbox" name="notify" value="1" checked> avisar gestor</label>
+    <button class="btn btn-primary" type="submit">Rodar</button>
+  </form>
+
+  <form class="action-card" method="post" action="/acoes/aviso">
+    <strong>Avisar gestor</strong>
+    <span class="muted small">Envia o resumo do dia pelo WhatsApp</span>
+    <input type="date" name="date" value="{{ dia }}" aria-label="Dia do resumo">
+    <button class="btn btn-primary" type="submit">Enviar</button>
+  </form>
+
+  <form class="action-card" method="post" action="/acoes/backup">
+    <strong>Backup agora</strong>
+    <span class="muted small">Copia o banco e valida a integridade</span>
+    <button class="btn btn-ghost" type="submit">Fazer backup</button>
+  </form>
+</div>

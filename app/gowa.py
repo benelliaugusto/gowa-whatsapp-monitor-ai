@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import re
+import urllib.parse
 from datetime import timedelta
 from typing import Any
 
@@ -185,6 +186,7 @@ class GowaClient:
             url = f"{self.base_url}/{str(caminho).lstrip('/')}"
         if not url:
             raise GowaError("GOWA nao informou file_url/file_path para a midia")
+        url = self._reescrever_url_midia(str(url))
         client = await self.client()
         try:
             response = await client.get(url)
@@ -193,6 +195,19 @@ class GowaClient:
         if response.status_code >= 400:
             raise GowaError(f"falha ao baixar midia: HTTP {response.status_code}", response.status_code)
         return response.content
+
+    def _reescrever_url_midia(self, url: str) -> str:
+        """O GOWA pode devolver localhost/127.0.0.1 na URL; usa o host real configurado."""
+        try:
+            partes = urllib.parse.urlsplit(url)
+            if partes.hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
+                base = urllib.parse.urlsplit(self.base_url)
+                return urllib.parse.urlunsplit(
+                    (base.scheme or "http", base.netloc, partes.path, partes.query, partes.fragment)
+                )
+        except ValueError:
+            pass
+        return url
 
     async def health(self) -> bool:
         try:

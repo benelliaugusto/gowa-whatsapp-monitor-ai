@@ -59,7 +59,6 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     whisper_model_dir: str = "/data/models"
     whisper_language: str = "pt"
-    whisper_max_seconds: int = 300
     whisper_interval_seconds: int = 60    # de quanto em quanto tempo busca áudios pendentes
 
     # --- horário comercial (métricas e alertas) --------------------------

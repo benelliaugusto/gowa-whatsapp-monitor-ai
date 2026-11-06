@@ -115,19 +115,43 @@ def headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # monitor-ia
 # ---------------------------------------------------------------------------
+def _com_retry(acao, descricao: str, tentativas: int = 3):
+    """Executa uma chamada HTTP ao monitor com retry em falhas transitórias."""
+    ultimo: Exception | None = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            return acao()
+        except (httpx.HTTPError, RuntimeError) as exc:
+            ultimo = exc
+            if tentativa < tentativas:
+                espera = 2 ** (tentativa - 1)
+                log(f"monitor indisponivel em {descricao} ({exc}); tentativa {tentativa}/{tentativas}, aguardando {espera}s")
+                time.sleep(espera)
+    raise RuntimeError(f"falha em {descricao}: {ultimo}")
+
+
 def obter_digest(cliente: httpx.Client, dia: str, max_chars: int) -> dict:
-    resposta = cliente.get(
-        f"{MONITOR_URL}/api/v1/digest",
-        params={"date": dia, "max_chars": max_chars},
-        headers=headers(),
-        timeout=120,
-    )
-    resposta.raise_for_status()
-    return resposta.json()
+    def buscar():
+        resposta = cliente.get(
+            f"{MONITOR_URL}/api/v1/digest",
+            params={"date": dia, "max_chars": max_chars},
+            headers=headers(),
+            timeout=120,
+        )
+        resposta.raise_for_status()
+        return resposta.json()
+
+    return _com_retry(buscar, "GET /api/v1/digest")
 
 
 def postar(cliente: httpx.Client, caminho: str, payload: dict, timeout: int = 60) -> httpx.Response:
-    return cliente.post(f"{MONITOR_URL}{caminho}", json=payload, headers=headers(), timeout=timeout)
+    def enviar():
+        resposta = cliente.post(f"{MONITOR_URL}{caminho}", json=payload, headers=headers(), timeout=timeout)
+        if resposta.status_code >= 500:
+            raise RuntimeError(f"HTTP {resposta.status_code} em {caminho}")
+        return resposta
+
+    return _com_retry(enviar, caminho)
 
 
 # ---------------------------------------------------------------------------

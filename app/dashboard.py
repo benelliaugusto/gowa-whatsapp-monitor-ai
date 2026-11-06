@@ -8,7 +8,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-from . import db, digest
+from . import actions, db, digest
 from .config import settings
 from .gowa import get_sync_service, gowa_status, is_group, normalize_jid, phone_from_jid
 from .security import dashboard_auth
@@ -205,3 +205,74 @@ def definir_estagio(
     if date:
         destino += f"?date={date}"
     return RedirectResponse(url=destino, status_code=303)
+
+# ---------------------------------------------------------------------------
+# central de ações (rodar cada função pelo painel)
+# ---------------------------------------------------------------------------
+@router.get("/acoes", response_class=HTMLResponse)
+def acoes(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="actions.html",
+        context=_ctx(
+            request,
+            execucoes=db.recent_action_runs(15),
+            agente_rodando=db.running_action("agente") is not None,
+            dia=today_local(),
+            transcricoes=db.transcription_stats(),
+            manager_configurado=bool(settings.manager_whatsapp),
+            sync_minutos=settings.sync_interval_minutes,
+            backup_keep=settings.backup_keep,
+            ok=request.query_params.get("ok"),
+            ins=request.query_params.get("ins"),
+            erro=request.query_params.get("erro"),
+            agendado=request.query_params.get("agendado"),
+            aviso=request.query_params.get("aviso"),
+        ),
+    )
+
+
+@router.post("/acoes/sincronizar")
+async def acao_sincronizar(days: int = Form(default=0)) -> RedirectResponse:
+    try:
+        resultado = await actions.rodar_sync(days or None)
+        volta = f"ok={1 if resultado.get('ok') else 0}&ins={resultado.get('messages_inserted', 0)}"
+    except Exception as exc:  # noqa: BLE001
+        volta = f"erro={quote(str(exc)[:200])}"
+    return RedirectResponse(url=f"/acoes?{volta}", status_code=303)
+
+
+@router.post("/acoes/transcrever")
+async def acao_transcrever(limit: int = Form(default=10)) -> RedirectResponse:
+    try:
+        resultado = await actions.rodar_transcricao(limit)
+        volta = f"ok=1&ins={resultado.get('done', 0)}&extra={resultado.get('failed', 0)}"
+    except Exception as exc:  # noqa: BLE001
+        volta = f"erro={quote(str(exc)[:200])}"
+    return RedirectResponse(url=f"/acoes?{volta}", status_code=303)
+
+
+@router.post("/acoes/agente")
+async def acao_agente(date: str = Form(default=""), notify: str = Form(default="")) -> RedirectResponse:
+    resultado = actions.iniciar_agente(date or None, notify_manager=bool(notify))
+    if resultado.get("ok"):
+        return RedirectResponse(url="/acoes?agendado=1", status_code=303)
+    return RedirectResponse(url=f"/acoes?erro={quote(str(resultado.get('detail'))[:200])}", status_code=303)
+
+
+@router.post("/acoes/aviso")
+async def acao_aviso(date: str = Form(default="")) -> RedirectResponse:
+    try:
+        await actions.rodar_aviso(date or None)
+        return RedirectResponse(url="/acoes?aviso=1", status_code=303)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"/acoes?erro={quote(str(exc)[:200])}", status_code=303)
+
+
+@router.post("/acoes/backup")
+async def acao_backup() -> RedirectResponse:
+    try:
+        resultado = await actions.rodar_backup()
+        return RedirectResponse(url=f"/acoes?ok={1 if resultado.get('ok') else 0}", status_code=303)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"/acoes?erro={quote(str(exc)[:200])}", status_code=303)

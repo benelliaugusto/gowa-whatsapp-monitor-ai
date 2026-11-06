@@ -202,6 +202,35 @@ seletor para mover o lead no funil e o histórico de mudanças.
 O estágio é atualizado automaticamente pelo agente (`stage` na análise) ou
 manualmente (`PATCH /api/v1/conversations/{jid}/stage`).
 
+### Ações pelo painel (`/acoes`)
+
+O gestor não precisa de terminal: a página **Ações** (e o topo do painel) tem botão
+para cada função do sistema — cada clique registra uma linha em `action_runs` com
+status e saída:
+
+| botão | o que faz |
+|---|---|
+| **Sincronizar WhatsApp** | puxa o histórico recente do GOWA (dias opcional) |
+| **Transcrever áudios** | processa a fila de áudio (inclui os marcados como `skipped`) |
+| **Rodar IA do dia** | executa o agente em background: análises + relatório + tarefas (+ aviso opcional) |
+| **Avisar gestor** | envia o resumo do dia pelo WhatsApp |
+| **Backup agora** | cópia consistente do SQLite com checagem de integridade |
+
+Para o botão **Rodar IA** funcionar, o serviço **monitor-ia** precisa das variáveis
+do agente (o processo roda dentro do próprio container do monitor):
+
+```
+MONITOR_API_URL=http://127.0.0.1:8000   # mesmo container: localhost funciona
+MONITOR_API_KEY=<chave rw do API_KEYS>
+LLM_PROVIDER=opencode                   # ou anthropic/openai
+LLM_API_KEY=...
+LLM_MODEL=deepseek-v4.1-flash
+LLM_BASE_URL=https://opencode.ai/inference/go
+```
+
+> No **Cron** (outro container) o `MONITOR_API_URL` é o host interno
+> (`http://<projeto>_monitor-ia:8000`). São contextos diferentes — não confunda.
+
 ### Automação no Easypanel (dois serviços Cron)
 
 O monitor já roda dentro da imagem: use a **mesma imagem/repositório** em serviços

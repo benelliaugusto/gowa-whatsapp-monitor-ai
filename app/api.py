@@ -613,7 +613,7 @@ def patch_task(task_id: int, payload: TaskPatch) -> TaskOut:
     summary="Transcreve áudios pendentes (backfill manual)",
 )
 async def run_transcriptions(limit: int = Query(default=10, ge=1, le=200)) -> TranscriptionRunOut:
-    resultado = await transcription.processar_pendentes(limit)
+    resultado = await transcription.processar_pendentes(limit, incluir_ignorados=True)
     return TranscriptionRunOut(**resultado, stats=db.transcription_stats())
 
 
