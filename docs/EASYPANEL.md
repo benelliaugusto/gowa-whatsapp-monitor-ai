@@ -236,7 +236,9 @@ Command:  python -m app.agent --notify
 Variáveis extras:
 
 ```
-MONITOR_API_URL=http://127.0.0.1:8000
+# IMPORTANTE: o Cron roda em outro container. Use o host interno do SERVIÇO
+# monitor-ia (não 127.0.0.1). Confirme no Shell: getent hosts <projeto>_monitor-ia
+MONITOR_API_URL=http://<projeto>_monitor-ia:8000
 MONITOR_API_KEY=<a mesma chave rw usada na API>
 LLM_PROVIDER=anthropic
 LLM_API_KEY=<chave do provedor>

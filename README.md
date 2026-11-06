@@ -178,9 +178,14 @@ O monitor já roda dentro da imagem: use a **mesma imagem/repositório** em serv
 | `0 12,19 * * *` | `python -m app.agent --notify` | analisa o dia, publica relatório e avisa o gestor |
 | `0 3 * * *` | `python -m app.backup --keep 14` | backup consistente do SQLite |
 
-O agente precisa de `MONITOR_API_URL=http://127.0.0.1:8000`, `MONITOR_API_KEY`
-(chave `rw`) e das variáveis `LLM_*`. Se o dia não tiver conversas, ele não publica
-relatório vazio — apenas registra a execução em `/status`.
+O agente precisa de `MONITOR_API_URL` (host interno do serviço monitor, ex.:
+`http://projeto_monitor-ia:8000` — **não** `127.0.0.1`, pois o Cron é outro
+container), `MONITOR_API_KEY` (chave `rw`) e das variáveis `LLM_*`. Se o dia não
+tiver conversas, ele não publica relatório vazio — apenas registra a execução em
+`/status`.
+
+> Backup no mesmo volume protege contra corrupção do banco, não contra perda do
+> volume. Para proteção real, copie `/data/backups` para fora (S3, outro host).
 
 ### Transcrição de áudios
 
