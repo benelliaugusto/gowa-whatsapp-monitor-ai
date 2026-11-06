@@ -13,6 +13,7 @@ import logging
 import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Iterator
 
 from .config import settings
@@ -162,6 +163,8 @@ def init_db() -> None:
         os.makedirs(directory, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
+        conn.executescript(EXTRA_SCHEMA)
+        _ensure_columns(conn)
     log.info("banco inicializado em %s", settings.database_path)
 
 
@@ -230,6 +233,11 @@ def insert_messages(records: Iterable[dict]) -> int:
         local = sent.astimezone(settings.tz)
         body = rec.get("body") or ""
         uid = rec.get("msg_uid") or make_msg_uid(chat_jid, rec.get("sender_jid") or "", sent_iso, body)
+        midia = (rec.get("media_type") or "").lower()
+        if midia in {"audio", "ptt"}:
+            status_transcricao = "pending" if settings.transcribe_enabled else "skipped"
+        else:
+            status_transcricao = "none"
         rows.append(
             (
                 uid,
@@ -245,6 +253,7 @@ def insert_messages(records: Iterable[dict]) -> int:
                 sent_iso,
                 local.strftime("%Y-%m-%d"),
                 local.hour,
+                status_transcricao,
                 now,
             )
         )
@@ -258,8 +267,9 @@ def insert_messages(records: Iterable[dict]) -> int:
             """
             INSERT OR IGNORE INTO messages
                 (msg_uid, chat_jid, sender_jid, sender_name, direction, msg_type,
-                 body, media_type, source, device_id, sent_at, local_date, local_hour, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 body, media_type, source, device_id, sent_at, local_date, local_hour,
+                 transcription_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -729,3 +739,301 @@ def database_summary() -> dict:
         "last_message_at": last,
         "database_path": settings.database_path,
     }
+
+# ---------------------------------------------------------------------------
+# tarefas (ações geradas pelos agentes/relatórios)
+# ---------------------------------------------------------------------------
+EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_jid    TEXT,
+    title       TEXT NOT NULL,
+    details     TEXT,
+    owner       TEXT,
+    due_at      TEXT,
+    priority    INTEGER NOT NULL DEFAULT 2,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    source      TEXT,
+    report_id   INTEGER,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    done_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status, due_at);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    day         TEXT,
+    ok          INTEGER NOT NULL DEFAULT 1,
+    provider    TEXT,
+    model       TEXT,
+    analyses    INTEGER NOT NULL DEFAULT 0,
+    report_id   INTEGER,
+    detail      TEXT
+);
+"""
+
+_MESSAGE_COLUMNS = {
+    "transcription_status": "TEXT NOT NULL DEFAULT 'none'",
+    "transcription_model": "TEXT",
+    "transcribed_at": "TEXT",
+}
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Migração idempotente: adiciona colunas novas em bancos já existentes."""
+    existentes = {linha[1] for linha in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    for coluna, definicao in _MESSAGE_COLUMNS.items():
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {coluna} {definicao}")
+            log.info("migracao: coluna messages.%s adicionada", coluna)
+
+
+def create_task(data: dict) -> dict:
+    now = utc_now_iso()
+    with transaction() as conn:
+        cursor = conn.execute(
+            """INSERT INTO tasks (chat_jid, title, details, owner, due_at, priority,
+                                  status, source, report_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data.get("chat_jid"),
+                (data.get("title") or "").strip(),
+                data.get("details"),
+                data.get("owner"),
+                data.get("due_at"),
+                int(data.get("priority") or 2),
+                data.get("status") or "pending",
+                data.get("source") or "agent",
+                data.get("report_id"),
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return dict(row) if row else {}
+
+
+def get_task(task_id: int) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone())
+
+
+def update_task(task_id: int, fields: dict) -> dict | None:
+    permitidos = {"title", "details", "owner", "due_at", "priority", "status", "chat_jid"}
+    sets, params = [], {}
+    for chave, valor in fields.items():
+        if chave not in permitidos:
+            continue
+        sets.append(f"{chave} = :{chave}")
+        params[chave] = valor
+    if not sets:
+        return get_task(task_id)
+    sets.append("updated_at = :updated_at")
+    params["updated_at"] = utc_now_iso()
+    if fields.get("status") == "done":
+        sets.append("done_at = :done_at")
+        params["done_at"] = params["updated_at"]
+    params["id"] = task_id
+    with transaction() as conn:
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = :id", params)
+    return get_task(task_id)
+
+
+def list_tasks(*, status: str | None = None, owner: str | None = None, limit: int = 200) -> list[dict]:
+    where, params = ["1 = 1"], {}
+    if status:
+        where.append("status = :status")
+        params["status"] = status
+    if owner:
+        where.append("owner = :owner")
+        params["owner"] = owner
+    params["limit"] = limit
+    with connect() as conn:
+        rows = conn.execute(
+            f"""SELECT * FROM tasks WHERE {' AND '.join(where)}
+                 ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'done' THEN 1 ELSE 2 END,
+                          priority ASC, COALESCE(due_at, '9999-12-31') ASC, id DESC
+                 LIMIT :limit""",
+            params,
+        ).fetchall()
+    return _rows(rows)
+
+
+def pending_tasks_count() -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'pending'").fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# transcrição de áudio
+# ---------------------------------------------------------------------------
+def pending_transcriptions(limit: int = 5) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT msg_uid, chat_jid, media_type, body, sent_at
+                 FROM messages
+                WHERE transcription_status = 'pending'
+                ORDER BY sent_at ASC
+                LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return _rows(rows)
+
+
+def set_transcription(msg_uid: str, texto: str | None, status: str, model: str | None = None) -> None:
+    agora = utc_now_iso()
+    with transaction() as conn:
+        if texto:
+            conn.execute(
+                """UPDATE messages
+                      SET body = :texto, transcription_status = :status,
+                          transcription_model = :model, transcribed_at = :agora,
+                          msg_type = 'audio_transcrito'
+                    WHERE msg_uid = :uid""",
+                {"texto": texto, "status": status, "model": model, "agora": agora, "uid": msg_uid},
+            )
+        else:
+            conn.execute(
+                """UPDATE messages
+                      SET transcription_status = :status, transcription_model = :model,
+                          transcribed_at = :agora
+                    WHERE msg_uid = :uid""",
+                {"status": status, "model": model, "agora": agora, "uid": msg_uid},
+            )
+
+
+def transcription_stats() -> dict:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT transcription_status AS status, COUNT(*) AS total FROM messages GROUP BY transcription_status"
+        ).fetchall()
+    return {row["status"] or "none": row["total"] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# métricas de atendimento
+# ---------------------------------------------------------------------------
+def _janela_comercial() -> tuple[int, int, set[int]]:
+    try:
+        h_ini = int(str(settings.business_hours_start).split(":")[0])
+        h_fim = int(str(settings.business_hours_end).split(":")[0])
+    except (ValueError, AttributeError):
+        h_ini, h_fim = 8, 18
+    dias: set[int] = set()
+    for parte in str(settings.business_days).split(","):
+        parte = parte.strip()
+        if parte.isdigit():
+            dias.add(int(parte) % 7)
+    return h_ini, h_fim, dias or {1, 2, 3, 4, 5}
+
+
+def attendance_metrics(date_str: str) -> dict:
+    """Tempo de primeira resposta, conversas respondidas e contato fora do horário."""
+    h_ini, h_fim, dias = _janela_comercial()
+    with connect() as conn:
+        mensagens = _rows(
+            conn.execute(
+                """SELECT chat_jid, direction, sent_at, local_hour, local_date
+                     FROM messages
+                    WHERE local_date = ?
+                    ORDER BY chat_jid, sent_at ASC""",
+                (date_str,),
+            ).fetchall()
+        )
+        limite = iso(utc_now() - timedelta(hours=24))
+        sem_resposta = conn.execute(
+            """SELECT COUNT(*) FROM (
+                   SELECT chat_jid,
+                          MAX(CASE WHEN direction = 'in'  THEN sent_at END) AS ult_in,
+                          MAX(CASE WHEN direction = 'out' THEN sent_at END) AS ult_out
+                     FROM messages GROUP BY chat_jid
+               )
+               WHERE ult_in IS NOT NULL
+                 AND (ult_out IS NULL OR ult_in > ult_out)
+                 AND ult_in < ?""",
+            (limite,),
+        ).fetchone()[0]
+
+    por_chat: dict[str, list[dict]] = {}
+    fora_horario = 0
+    for m in mensagens:
+        por_chat.setdefault(m["chat_jid"], []).append(m)
+        if m["direction"] != "in":
+            continue
+        try:
+            hora = int(m["local_hour"])
+            data = datetime.strptime(str(m["local_date"]), "%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        if data.weekday() + 1 not in {d % 7 for d in dias} and 0 not in dias:
+            fora_horario += 1
+        elif not (h_ini <= hora < h_fim):
+            fora_horario += 1
+
+    respondidas = 0
+    tempos: list[float] = []
+    for lista in por_chat.values():
+        primeira_in = next((m for m in lista if m["direction"] == "in"), None)
+        if primeira_in is None:
+            continue
+        resposta = next(
+            (m for m in lista if m["direction"] == "out" and m["sent_at"] > primeira_in["sent_at"]),
+            None,
+        )
+        if resposta:
+            respondidas += 1
+            p, r = parse_ts(primeira_in["sent_at"]), parse_ts(resposta["sent_at"])
+            if p and r:
+                tempos.append((r - p).total_seconds() / 60.0)
+
+    tempos.sort()
+    return {
+        "conversas_com_lead": len(por_chat),
+        "conversas_respondidas": respondidas,
+        "pct_respondidas": round(100 * respondidas / len(por_chat), 1) if por_chat else 0.0,
+        "primeira_resposta_media_min": round(sum(tempos) / len(tempos), 1) if tempos else None,
+        "primeira_resposta_mediana_min": round(tempos[len(tempos) // 2], 1) if tempos else None,
+        "sem_resposta_24h": sem_resposta,
+        "mensagens_fora_horario": fora_horario,
+        "horario_comercial": f"{h_ini:02d}h-{h_fim:02d}h",
+    }
+
+
+# ---------------------------------------------------------------------------
+# execuções do agente (cron)
+# ---------------------------------------------------------------------------
+def start_agent_run(day: str, provider: str, model: str) -> int:
+    with transaction() as conn:
+        cursor = conn.execute(
+            "INSERT INTO agent_runs (started_at, day, provider, model) VALUES (?, ?, ?, ?)",
+            (utc_now_iso(), day, provider, model),
+        )
+    return int(cursor.lastrowid)
+
+
+def finish_agent_run(
+    run_id: int, *, ok: bool, analyses: int, report_id: int | None, detail: str = ""
+) -> None:
+    with transaction() as conn:
+        conn.execute(
+            """UPDATE agent_runs
+                  SET finished_at = ?, ok = ?, analyses = ?, report_id = ?, detail = ?
+                WHERE id = ?""",
+            (utc_now_iso(), 1 if ok else 0, analyses, report_id, (detail or "")[:1000], run_id),
+        )
+
+
+def recent_agent_runs(limit: int = 10) -> list[dict]:
+    with connect() as conn:
+        return _rows(
+            conn.execute("SELECT * FROM agent_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        )
+
+
+def recent_sync_failures(limit: int = 2) -> int:
+    with connect() as conn:
+        rows = conn.execute("SELECT ok FROM sync_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return sum(1 for r in rows if not r["ok"])

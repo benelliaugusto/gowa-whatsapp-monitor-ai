@@ -62,6 +62,49 @@
 </section>
 
 <section class="card">
+  <header class="card-head"><h2>Agente de IA e transcrição</h2></header>
+  <dl class="kv">
+    <dt>Tarefas pendentes</dt><dd>{{ tarefas_pendentes }}</dd>
+    <dt>Transcrições</dt>
+    <dd>
+      {% for status, total in transcricoes.items() %}
+        <span class="tag">{{ status }}: {{ total }}</span>
+      {% else %}
+        <span class="muted small">nenhuma mensagem</span>
+      {% endfor %}
+    </dd>
+    <dt>Última execução do agente</dt>
+    <dd>
+      {% if agent_runs %}
+        {{ agent_runs[0].started_at|datahora_br }}
+        <span class="badge {{ 'badge-ok' if agent_runs[0].ok else 'badge-danger' }}">{{ 'ok' if agent_runs[0].ok else 'falhou' }}</span>
+        {% if agent_runs[0].analyses %}<span class="muted small">{{ agent_runs[0].analyses }} análise(s)</span>{% endif %}
+      {% else %}
+        <span class="muted small">nunca executou</span>
+      {% endif %}
+    </dd>
+  </dl>
+  {% if agent_runs %}
+  <div class="table-wrap" style="margin-top:12px">
+    <table class="table">
+      <thead><tr><th>Início</th><th>Dia</th><th>Modelo</th><th class="num">Análises</th><th>Resultado</th></tr></thead>
+      <tbody>
+        {% for r in agent_runs %}
+        <tr>
+          <td class="muted">{{ r.started_at|datahora_br }}</td>
+          <td>{{ r.day or '—' }}</td>
+          <td class="small">{{ r.provider or '—' }}{% if r.model %} / {{ r.model }}{% endif %}</td>
+          <td class="num">{{ r.analyses }}</td>
+          <td>{% if r.ok %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-danger" title="{{ r.detail or '' }}">falhou</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="card">
   <header class="card-head"><h2>Últimas sincronizações</h2></header>
   <div class="table-wrap">
     <table class="table">

@@ -64,6 +64,9 @@ class DigestOut(BaseModel):
     conversations: list[DigestConversation]
     truncated: bool = False
     notes: list[str] = Field(default_factory=list)
+    attendance: dict[str, Any] | None = Field(
+        default=None, description="Tempo de 1ª resposta, sem resposta +24h, contato fora do horário"
+    )
 
 
 class AnalysisIn(BaseModel):
@@ -202,3 +205,89 @@ class HealthOut(BaseModel):
     database: dict[str, Any]
     gowa: dict[str, Any]
     sync: dict[str, Any]
+
+# ---------------------------------------------------------------------------
+# tarefas
+# ---------------------------------------------------------------------------
+class TaskIn(BaseModel):
+    chat_jid: str | None = Field(default=None, description="Conversa relacionada (JID)")
+    title: str = Field(..., min_length=3, max_length=200, description="O que precisa ser feito")
+    details: str | None = Field(default=None, max_length=2000)
+    owner: str | None = Field(default=None, description="Responsável (ex.: recepcao, gestor)")
+    due_at: date | None = Field(default=None, description="Prazo (YYYY-MM-DD)")
+    priority: int = Field(default=2, ge=1, le=3, description="1 = alta, 2 = normal, 3 = baixa")
+    source: str | None = Field(default=None, description="agent | report | manual")
+    report_id: int | None = None
+    status: Literal["pending", "done", "cancelled"] = "pending"
+
+
+class TaskPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=200)
+    details: str | None = None
+    owner: str | None = None
+    due_at: date | None = None
+    priority: int | None = Field(default=None, ge=1, le=3)
+    status: Literal["pending", "done", "cancelled"] | None = None
+    chat_jid: str | None = None
+
+
+class TaskOut(BaseModel):
+    id: int
+    chat_jid: str | None = None
+    title: str
+    details: str | None = None
+    owner: str | None = None
+    due_at: str | None = None
+    priority: int = 2
+    status: str = "pending"
+    source: str | None = None
+    report_id: int | None = None
+    created_at: str
+    updated_at: str
+    done_at: str | None = None
+
+
+class TranscriptionRunOut(BaseModel):
+    enabled: bool
+    processed: int = 0
+    done: int = 0
+    failed: int = 0
+    stats: dict[str, int] = Field(default_factory=dict)
+
+
+class NotifyIn(BaseModel):
+    # o campo NAO pode se chamar "date": isso sombreia o tipo datetime.date
+    # na resolucao das anotacoes do Pydantic.
+    day: date | None = None
+    phone: str | None = Field(default=None, description="Sobrescreve MANAGER_WHATSAPP")
+    text: str | None = Field(default=None, max_length=3000)
+
+
+class NotifyOut(BaseModel):
+    ok: bool
+    phone: str
+    message_id: str | None = None
+    text: str
+
+
+class AgentRunIn(BaseModel):
+    day: date | None = None
+    provider: str | None = None
+    model: str | None = None
+    ok: bool = True
+    analyses: int = Field(default=0, ge=0)
+    report_id: int | None = None
+    detail: str | None = Field(default=None, max_length=1000)
+
+
+class AgentRunOut(BaseModel):
+    id: int
+    started_at: str
+    finished_at: str | None = None
+    day: str | None = None
+    ok: int = 1
+    provider: str | None = None
+    model: str | None = None
+    analyses: int = 0
+    report_id: int | None = None
+    detail: str | None = None

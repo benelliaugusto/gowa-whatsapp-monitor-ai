@@ -41,6 +41,9 @@ os.environ.update(
         "GOWA_URL": "http://127.0.0.1:9",
         "GOWA_BASIC_AUTH": "admin:senha",
         "GOWA_WEBHOOK_SECRET": "segredo-de-teste",
+        "TRANSCRIBE_ENABLED": "false",
+        "BUSINESS_HOURS_START": "08:00",
+        "BUSINESS_HOURS_END": "18:00",
         "LOG_LEVEL": "WARNING",
     }
 )
@@ -100,6 +103,19 @@ def popular_banco() -> None:
                 }
             )
     db.insert_messages(registros)
+    db.insert_messages(
+        [
+            {
+                "chat_jid": "5511988887777@s.whatsapp.net",
+                "sender_jid": "5511988887777@s.whatsapp.net",
+                "direction": "in",
+                "body": "[audio]",
+                "media_type": "audio",
+                "source": "teste",
+                "sent_at": (agora - timedelta(minutes=20)).isoformat(),
+            }
+        ]
+    )
     db.upsert_contact("5511988887777@s.whatsapp.net", name="Maria Silva", phone="5511988887777")
     db.upsert_contact("5511977776666@s.whatsapp.net", name="Joao Souza", phone="5511977776666")
 
@@ -144,7 +160,7 @@ def main() -> int:
         check("GET /api/v1/conversations", resposta.status_code == 200 and len(resposta.json()) == 2, resposta.text[:200])
 
         resposta = cliente.get(f"/api/v1/conversations/5511988887777%40s.whatsapp.net/messages?date={dia}", headers=RO)
-        check("mensagens da conversa", resposta.status_code == 200 and len(resposta.json()) == 4, resposta.text[:200])
+        check("mensagens da conversa", resposta.status_code == 200 and len(resposta.json()) == 5, resposta.text[:200])
 
         resposta = cliente.get(f"/api/v1/conversations/5511988887777%40s.whatsapp.net/transcript?date={dia}", headers=RO)
         check("transcrição individual", resposta.status_code == 200 and "limpeza de pele" in resposta.text)
@@ -213,6 +229,8 @@ def main() -> int:
         check("GET / painel", resposta.status_code == 200 and "Painel do gestor" in resposta.text, resposta.text[:200])
         check("painel lista conversas", "Maria Silva" in resposta.text)
         check("painel mostra o dia selecionado", dia_br in resposta.text, dia_br)
+        check("painel com cartão de atendimento", "Atendimento do dia" in resposta.text)
+        check("painel com bloco de pendências", "Pendências" in resposta.text)
         resposta = cliente.get("/relatorios")
         check("GET /relatorios", resposta.status_code == 200 and "Relatório diário de testes" in resposta.text)
         resposta = cliente.get(f"/relatorios/{primeiro_id}")
@@ -249,6 +267,55 @@ def main() -> int:
         check("webhook duplicado não duplica", resposta.json().get("inserted") == 0)
         resposta = cliente.get(f"/api/v1/conversations?date={dia}", headers=RO)
         check("nova conversa do webhook aparece", any(c["chat_jid"] == "5511966665555@s.whatsapp.net" for c in resposta.json()))
+
+        print("\n[9] fase 0: tarefas, atendimento, transcrição e agente")
+        resposta = cliente.post(
+            "/api/v1/tasks",
+            headers=RW,
+            json={
+                "chat_jid": "5511988887777@s.whatsapp.net",
+                "title": "Ligar para Maria e confirmar sexta 15h",
+                "owner": "recepcao",
+                "due_at": dia,
+                "priority": 1,
+            },
+        )
+        check("POST /api/v1/tasks -> 201", resposta.status_code == 201, resposta.text[:200])
+        tarefa_id = resposta.json().get("id") if resposta.status_code == 201 else 0
+        check("tarefa nasce pendente", resposta.json().get("status") == "pending")
+        lista = cliente.get("/api/v1/tasks?status=pending", headers=RO)
+        check("GET /api/v1/tasks", lista.status_code == 200 and any(t["id"] == tarefa_id for t in lista.json()))
+        check("tarefas sem chave -> 401", cliente.get("/api/v1/tasks").status_code == 401)
+        patch = cliente.patch(f"/api/v1/tasks/{tarefa_id}", headers=RW, json={"status": "done"})
+        check("PATCH /tasks conclui", patch.status_code == 200 and patch.json()["status"] == "done")
+        check("tarefa inexistente -> 404", cliente.patch("/api/v1/tasks/999999", headers=RW, json={"status": "done"}).status_code == 404)
+
+        stats = cliente.get(f"/api/v1/stats/daily?date={dia}", headers=RO)
+        check("stats/daily com atendimento", stats.status_code == 200 and "atendimento" in stats.json(), stats.text[:200])
+        atendimento = stats.json().get("atendimento") or {}
+        check("métrica de 1ª resposta", atendimento.get("primeira_resposta_media_min") is not None, str(atendimento))
+        check("métrica de conversas", atendimento.get("conversas_com_lead", 0) >= 2, str(atendimento))
+        check("digest com atendimento", cliente.get(f"/api/v1/digest?date={dia}", headers=RO).json().get("attendance") is not None)
+
+        tr = cliente.get("/api/v1/transcriptions/stats", headers=RO)
+        check("GET /transcriptions/stats", tr.status_code == 200 and tr.json()["stats"].get("skipped", 0) >= 1, tr.text[:200])
+        tr = cliente.post("/api/v1/transcriptions/run", headers=RW)
+        check("transcrição desligada não processa", tr.status_code == 200 and tr.json()["enabled"] is False, tr.text[:200])
+
+        aviso = cliente.post("/api/v1/notify/manager", headers=RW, json={"day": dia})
+        check("aviso sem MANAGER_WHATSAPP -> 422", aviso.status_code == 422, aviso.text[:200])
+
+        run = cliente.post(
+            "/api/v1/agent-runs",
+            headers=RW,
+            json={"day": dia, "provider": "teste", "model": "fake", "ok": True, "analyses": 2, "report_id": primeiro_id, "detail": "smoke"},
+        )
+        check("POST /api/v1/agent-runs -> 201", run.status_code == 201, run.text[:200])
+        runs = cliente.get("/api/v1/agent-runs", headers=RO)
+        check("GET /api/v1/agent-runs", runs.status_code == 200 and len(runs.json()) >= 1)
+
+        db.init_db()
+        check("init_db idempotente (migração)", db.pending_tasks_count() >= 0)
 
         print("\n[8] contrato para o agente")
         resposta = cliente.get("/api/v1/contract", headers=RO)

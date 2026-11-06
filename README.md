@@ -40,6 +40,10 @@ O que você ganha em relação à v1 (Dockerfile único com `main.py` embutido):
 │   ├── db.py                 # SQLite: schema, consultas, migrations idempotentes
 │   ├── gowa.py               # cliente GOWA + sincronização de histórico
 │   ├── webhook.py            # recebe eventos do GOWA (HMAC + dedup)
+│   ├── transcription.py      # transcrição local de áudios (faster-whisper)
+│   ├── notify.py             # avisos ao gestor pelo WhatsApp
+│   ├── agent.py              # agente em cron: digest -> LLM -> análises/relatório/tarefas
+│   ├── backup.py             # backup do SQLite (cron)
 │   ├── api.py                # /api/v1 para os agentes de IA
 │   ├── schemas.py            # contrato Pydantic (OpenAPI)
 │   ├── digest.py             # conversas -> texto compacto para o LLM
@@ -115,6 +119,13 @@ Documentação completa: [`docs/API.md`](docs/API.md) · contrato do agente:
 | POST | `/api/v1/reports` | publica o relatório do gestor (idempotente) |
 | PATCH | `/api/v1/reports/{id}` | atualiza/despublica |
 | POST | `/api/v1/sync` | força sincronização com o GOWA |
+| GET | `/api/v1/tasks` | pendências da recepção (com filtro de status) |
+| POST | `/api/v1/tasks` | cria tarefa (o agente converte `action_items` em tarefas) |
+| PATCH | `/api/v1/tasks/{id}` | conclui/atualiza tarefa |
+| POST | `/api/v1/transcriptions/run` | força transcrição de áudios pendentes (backfill) |
+| GET | `/api/v1/transcriptions/stats` | fila de transcrição (pending/done/failed) |
+| POST | `/api/v1/notify/manager` | envia o resumo do dia ao gestor pelo WhatsApp |
+| GET/POST | `/api/v1/agent-runs` | histórico/registro das execuções do agente (cron) |
 | GET | `/api/v1/health` | saúde (público) |
 
 Exemplo (o "contrato" do dia):
@@ -155,7 +166,29 @@ python examples/agent_claude.py --date 2026-11-05             # publica
    "Cron" do próprio Easypanel ou a ferramenta de agendamento do seu agente.
 
 Para Grok/xAI basta trocar para `LLM_PROVIDER=openai`,
-`OPENAI_BASE_URL=https://api.x.ai/v1`, `OPENAI_API_KEY=xai-...`, `LLM_MODEL=grok-4`.
+`LLM_BASE_URL=https://api.x.ai/v1`, `LLM_API_KEY=xai-...`, `LLM_MODEL=grok-4`.
+
+### Automação no Easypanel (dois serviços Cron)
+
+O monitor já roda dentro da imagem: use a **mesma imagem/repositório** em serviços
+`Cron` apontando para os comandos abaixo.
+
+| cron | comando | função |
+|---|---|---|
+| `0 12,19 * * *` | `python -m app.agent --notify` | analisa o dia, publica relatório e avisa o gestor |
+| `0 3 * * *` | `python -m app.backup --keep 14` | backup consistente do SQLite |
+
+O agente precisa de `MONITOR_API_URL=http://127.0.0.1:8000`, `MONITOR_API_KEY`
+(chave `rw`) e das variáveis `LLM_*`. Se o dia não tiver conversas, ele não publica
+relatório vazio — apenas registra a execução em `/status`.
+
+### Transcrição de áudios
+
+Com `TRANSCRIBE_ENABLED=true`, mensagens de áudio entram como `pending` e um worker
+em background transcreve (CPU, `faster-whisper`) e substitui o `[audio]` pelo texto
+real — o digest e a IA passam a "ouvir" o paciente. O modelo fica em
+`/data/models` (volume), então é baixado uma única vez. Para forçar o backfill:
+`POST /api/v1/transcriptions/run`.
 
 ## Variáveis de ambiente
 
@@ -174,6 +207,13 @@ Detalhes e defaults em [`.env.example`](.env.example).
 | `SYNC_INTERVAL_MINUTES` | `15` | sincronização automática (0 desliga) |
 | `SYNC_WINDOW_DAYS` | `3` | janela puxada do histórico a cada sync |
 | `DIGEST_MAX_CHARS` | `60000` | orçamento de contexto do digest |
+| `TRANSCRIBE_ENABLED` | `true` | transcrição local de áudios (`faster-whisper`) |
+| `WHISPER_MODEL` | `small` | modelo do whisper (`tiny`…`large-v3`) |
+| `WHISPER_MODEL_DIR` | `/data/models` | cache do modelo (deve ficar no volume) |
+| `BUSINESS_HOURS_START/END` | `08:00`/`18:00` | horário comercial para as métricas |
+| `MANAGER_WHATSAPP` | — | número do gestor para os avisos (só dígitos com DDI) |
+| `BACKUP_DIR` / `BACKUP_KEEP` | `/data/backups` / `14` | backup automático do banco |
+| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` | — | provedor do agente em cron |
 | `LOG_LEVEL` | `INFO` | verbosidade |
 
 ## Como os dados entram
@@ -196,9 +236,10 @@ python scripts/smoke_test.py
 ```
 
 O script cria um SQLite temporário, popula 2 conversas, sobe a app com
-`TestClient` e valida 43 pontos: auth (`ro`/`rw`/401/403), digest, transcrições,
+`TestClient` e valida 63 pontos: auth (`ro`/`rw`/401/403), digest, transcrições,
 upsert de análise, idempotência de relatório, painel HTML (markdown sanitizado),
-webhook assinado/duplicado e contrato.
+webhook assinado/duplicado, tarefas, métricas de atendimento, fila de transcrição
+e telemetria do agente.
 
 ## Operação
 

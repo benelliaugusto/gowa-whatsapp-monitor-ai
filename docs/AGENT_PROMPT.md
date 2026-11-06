@@ -33,9 +33,12 @@ análises e relatórios.
 3. **Analise** uma conversa por vez com o seu modelo.
 4. **Grave a análise de cada conversa** com `POST /api/v1/analyses`
    (é um *upsert* por `chat_jid` + `analysis_date`; rodar duas vezes não duplica).
-5. **Publique o relatório do gestor** com `POST /api/v1/reports`
+5. **Crie tarefas acionáveis** com `POST /api/v1/tasks` a partir dos seus
+   `action_items` (quem faz, o quê, até quando). O painel do gestor mostra essas
+   pendências com botão de concluir.
+6. **Publique o relatório do gestor** com `POST /api/v1/reports`
    (idempotente por `idempotency_key`; reenvios devolvem 200 com o mesmo `id`).
-6. Opcional: `PATCH /api/v1/reports/{id}` com `{"status": "draft"}` para deixar
+7. Opcional: `PATCH /api/v1/reports/{id}` com `{"status": "draft"}` para deixar
    em rascunho e publicar depois pelo painel.
 
 ## 3. Entrada: `GET /api/v1/digest`
@@ -161,6 +164,26 @@ Regras:
   Repetir a chamada **não** cria duplicata: devolve `200` com o relatório existente.
 - Resposta de criação: `201`.
 
+## 5b. Escrita: `POST /api/v1/tasks`
+
+```json
+{
+  "chat_jid": "5511999999999@s.whatsapp.net",
+  "title": "Ligar para Maria e confirmar sexta 15h",
+  "details": "Ela pediu confirmação por áudio.",
+  "owner": "recepcao",
+  "due_at": "2026-11-05",
+  "priority": 1,
+  "source": "report",
+  "report_id": 12
+}
+```
+
+- `status`: `pending` (padrão), `done`, `cancelled` — conclua com
+  `PATCH /api/v1/tasks/{id}` `{"status": "done"}`.
+- `priority`: 1 alta, 2 normal, 3 baixa.
+- Crie no máximo ~10 tarefas por dia, priorizando o que precisa de ação **hoje**.
+
 ## 6. Outras rotas úteis
 
 | rota                                             | método | para quê                                            |
@@ -174,6 +197,10 @@ Regras:
 | `/api/v1/sync`                                   | POST   | força sincronização com o GOWA                      |
 | `/api/v1/sync/runs`                              | GET    | histórico de sincronizações                         |
 | `/api/v1/health`                                 | GET    | saúde (público, sem key)                            |
+| `/api/v1/tasks`                                  | GET/POST/PATCH | pendências acionáveis                       |
+| `/api/v1/transcriptions/stats`                   | GET    | fila de transcrição de áudio                        |
+| `/api/v1/agent-runs`                             | GET/POST | histórico de execuções do agente                  |
+| `/api/v1/notify/manager`                         | POST   | envia resumo ao gestor pelo WhatsApp                |
 | `/api/v1/contract`                               | GET    | este documento                                      |
 | `/docs`                                          | GET    | Swagger/OpenAPI interativo                          |
 

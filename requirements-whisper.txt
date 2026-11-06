@@ -1,0 +1,3 @@
+# Transcrição local de áudios (CPU). Instalado em etapa tolerante a falha no Dockerfile:
+# se não instalar, o monitor sobe normalmente e a transcrição fica desativada.
+faster-whisper==1.2.1

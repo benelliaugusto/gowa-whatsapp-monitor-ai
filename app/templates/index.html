@@ -52,6 +52,63 @@
   </div>
 </div>
 
+{% if atendimento %}
+<div class="grid-2" style="margin-bottom:18px">
+  <section class="card">
+    <header class="card-head">
+      <h2>Atendimento do dia</h2>
+      <span class="muted small">{{ atendimento.horario_comercial }}</span>
+    </header>
+    <div class="metrics">
+      <div class="metric">
+        <span class="label">1ª resposta (média)</span>
+        <strong>{% if atendimento.primeira_resposta_media_min is not none %}{{ atendimento.primeira_resposta_media_min }} min{% else %}—{% endif %}</strong>
+      </div>
+      <div class="metric">
+        <span class="label">Respondidas</span>
+        <strong>{{ atendimento.pct_respondidas }}%</strong>
+      </div>
+      <div class="metric">
+        <span class="label">Sem resposta +24h</span>
+        <strong>{{ atendimento.sem_resposta_24h }}</strong>
+      </div>
+      <div class="metric">
+        <span class="label">Fora do horário</span>
+        <strong>{{ atendimento.mensagens_fora_horario }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <header class="card-head">
+      <h2>Pendências</h2>
+      <span class="muted small">{{ tarefas|length }}</span>
+    </header>
+    {% if tarefas %}
+      <table class="table">
+        <tbody>
+          {% for t in tarefas %}
+          <tr>
+            <td>
+              <strong>{{ t.title }}</strong>
+              {% if t.chat_jid %}<div class="small muted">{{ t.chat_jid }}</div>{% endif %}
+            </td>
+            <td class="num">
+              <form method="post" action="/admin/tarefa/{{ t.id }}/concluir" style="margin:0">
+                <button class="btn btn-ghost" type="submit">Concluir</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty small">Nenhuma pendência aberta.</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+
 <div class="grid-2">
   <section class="card">
     <header class="card-head">

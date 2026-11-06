@@ -17,7 +17,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
 
-from . import db, digest
+from . import db, digest, notify, transcription
 from .config import settings
 from .gowa import get_gowa_client, get_sync_service, gowa_status, is_group, normalize_jid, phone_from_jid
 from .schemas import (
@@ -35,6 +35,16 @@ from .schemas import (
     SyncIn,
     SyncOut,
     SyncRunOut,
+)
+from .schemas import (
+    AgentRunIn,
+    AgentRunOut,
+    NotifyIn,
+    NotifyOut,
+    TaskIn,
+    TaskOut,
+    TaskPatch,
+    TranscriptionRunOut,
 )
 from .security import ApiKey, require_api_key, require_write_key
 from .timeutil import day_bounds, iso, local_date_of, parse_ts, resolve_date, today_local, utc_now_iso
@@ -330,6 +340,7 @@ def get_digest(
         conversations=conversas,
         truncated=truncado_geral,
         notes=notas,
+        attendance=None if usando_intervalo else db.attendance_metrics(dia),
     )
     if format == "text":
         resumo_linhas = [
@@ -467,7 +478,10 @@ def patch_report(report_id: int, payload: ReportPatch) -> ReportOut:
     summary="KPIs do dia (mensagens, conversas, novas, top conversas)",
 )
 def stats_daily(date: str | None = Query(default=None)) -> dict[str, Any]:
-    return db.daily_stats(resolve_date(date))
+    dia = resolve_date(date)
+    dados = db.daily_stats(dia)
+    dados["atendimento"] = db.attendance_metrics(dia)
+    return dados
 
 
 @router.post(
@@ -518,3 +532,135 @@ async def gowa_diagnostics() -> dict[str, Any]:
         "client": {"base_url": client.base_url, "basic_auth_configured": bool(settings.gowa_basic_auth)},
         "status": await gowa_status(),
     }
+
+# ---------------------------------------------------------------------------
+# tarefas (pendências da recepção/gestor)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/tasks",
+    response_model=list[TaskOut],
+    dependencies=[Depends(require_api_key)],
+    summary="Lista tarefas (pendências)",
+)
+def list_tasks(
+    status: str | None = Query(default=None, description="pending | done | cancelled"),
+    owner: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list[TaskOut]:
+    return [TaskOut(**row) for row in db.list_tasks(status=status, owner=owner, limit=limit)]
+
+
+@router.post(
+    "/tasks",
+    response_model=TaskOut,
+    status_code=201,
+    dependencies=[Depends(require_write_key)],
+    summary="Cria uma tarefa (o agente transforma action_items em tarefas)",
+)
+def create_task(payload: TaskIn) -> TaskOut:
+    dados = payload.model_dump()
+    if payload.due_at:
+        dados["due_at"] = payload.due_at.isoformat()
+    return TaskOut(**db.create_task(dados))
+
+
+@router.patch(
+    "/tasks/{task_id}",
+    response_model=TaskOut,
+    dependencies=[Depends(require_write_key)],
+    summary="Atualiza ou conclui uma tarefa",
+)
+def patch_task(task_id: int, payload: TaskPatch) -> TaskOut:
+    campos = payload.model_dump(exclude_unset=True)
+    if campos.get("due_at") is not None:
+        campos["due_at"] = campos["due_at"].isoformat()
+    row = db.update_task(task_id, campos)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Tarefa nao encontrada"})
+    return TaskOut(**row)
+
+
+# ---------------------------------------------------------------------------
+# transcrição de áudios
+# ---------------------------------------------------------------------------
+@router.post(
+    "/transcriptions/run",
+    response_model=TranscriptionRunOut,
+    dependencies=[Depends(require_write_key)],
+    summary="Transcreve áudios pendentes (backfill manual)",
+)
+async def run_transcriptions(limit: int = Query(default=10, ge=1, le=200)) -> TranscriptionRunOut:
+    resultado = await transcription.processar_pendentes(limit)
+    return TranscriptionRunOut(**resultado, stats=db.transcription_stats())
+
+
+@router.get(
+    "/transcriptions/stats",
+    dependencies=[Depends(require_api_key)],
+    summary="Status da fila de transcrição",
+)
+def transcription_stats() -> dict[str, Any]:
+    return {
+        "enabled": settings.transcribe_enabled,
+        "model": settings.whisper_model,
+        "stats": db.transcription_stats(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# avisos ao gestor
+# ---------------------------------------------------------------------------
+@router.post(
+    "/notify/manager",
+    response_model=NotifyOut,
+    dependencies=[Depends(require_write_key)],
+    summary="Envia o resumo do dia ao gestor pelo WhatsApp (GOWA)",
+)
+async def notify_manager(payload: NotifyIn | None = None) -> NotifyOut:
+    body = payload or NotifyIn()
+    try:
+        resultado = await notify.enviar_resumo(
+            body.day.isoformat() if body.day else None,
+            body.phone,
+            body.text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "validation", "message": str(exc)}) from exc
+    return NotifyOut(**resultado)
+
+
+# ---------------------------------------------------------------------------
+# execuções do agente (observabilidade do cron)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/agent-runs",
+    response_model=AgentRunOut,
+    status_code=201,
+    dependencies=[Depends(require_write_key)],
+    summary="Registra uma execução do agente (cron)",
+)
+def create_agent_run(payload: AgentRunIn) -> AgentRunOut:
+    run_id = db.start_agent_run(
+        payload.day.isoformat() if payload.day else today_local(),
+        payload.provider or "",
+        payload.model or "",
+    )
+    db.finish_agent_run(
+        run_id,
+        ok=payload.ok,
+        analyses=payload.analyses,
+        report_id=payload.report_id,
+        detail=payload.detail or "",
+    )
+    row = db.recent_agent_runs(1)[0]
+    return AgentRunOut(**row)
+
+
+@router.get(
+    "/agent-runs",
+    response_model=list[AgentRunOut],
+    dependencies=[Depends(require_api_key)],
+    summary="Últimas execuções do agente",
+)
+def list_agent_runs(limit: int = Query(default=10, ge=1, le=100)) -> list[AgentRunOut]:
+    return [AgentRunOut(**row) for row in db.recent_agent_runs(limit)]

@@ -52,6 +52,37 @@ class Settings(BaseSettings):
     dashboard_user: str = "gestor"
     dashboard_password: str = ""       # vazio = painel sem senha (só use atrás de proxy)
 
+    # --- transcrição local de áudios (faster-whisper) --------------------
+    transcribe_enabled: bool = True
+    whisper_model: str = "small"          # tiny | base | small | medium | large-v3
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_model_dir: str = "/data/models"
+    whisper_language: str = "pt"
+    whisper_max_seconds: int = 300
+    whisper_interval_seconds: int = 60    # de quanto em quanto tempo busca áudios pendentes
+
+    # --- horário comercial (métricas e alertas) --------------------------
+    business_hours_start: str = "08:00"
+    business_hours_end: str = "18:00"
+    business_days: str = "1,2,3,4,5"      # 0=domingo ... 6=sábado
+
+    # --- avisos ao gestor ------------------------------------------------
+    manager_whatsapp: str = ""            # ex.: 5511999999999 (só dígitos com DDI)
+    manager_name: str = ""
+
+    # --- backup ----------------------------------------------------------
+    backup_dir: str = "/data/backups"
+    backup_keep: int = 14
+
+    # --- agente de IA em cron (app/agent.py) -----------------------------
+    llm_provider: str = "anthropic"       # anthropic | openai
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_base_url: str = ""
+    monitor_api_url: str = "http://127.0.0.1:8000"
+    monitor_api_key: str = ""
+
     # --- digest ----------------------------------------------------------
     digest_max_chars: int = 60000
 

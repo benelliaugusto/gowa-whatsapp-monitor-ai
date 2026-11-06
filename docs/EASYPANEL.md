@@ -92,6 +92,22 @@ SYNC_ON_STARTUP=true
 SYNC_INTERVAL_MINUTES=15
 SYNC_WINDOW_DAYS=3
 
+# transcrição local de áudios (o modelo fica no volume, baixa uma vez)
+TRANSCRIBE_ENABLED=true
+WHISPER_MODEL=small
+WHISPER_MODEL_DIR=/data/models
+WHISPER_INTERVAL_SECONDS=60
+
+# horário comercial e avisos ao gestor
+BUSINESS_HOURS_START=08:00
+BUSINESS_HOURS_END=18:00
+BUSINESS_DAYS=1,2,3,4,5
+MANAGER_WHATSAPP=5511999999999
+
+# backup
+BACKUP_DIR=/data/backups
+BACKUP_KEEP=14
+
 # API dos agentes de IA — nome:escopo:chave
 API_KEYS=claude:rw:COLE-UMA-CHAVE-LONGA-ALEATORIA,grok:ro:COLE-OUTRA-CHAVE
 
@@ -203,6 +219,45 @@ auto deploy e use o botão **Deploy**.
 
 Migrações de banco: `app/db.py` usa `CREATE TABLE IF NOT EXISTS` e os índices são
 idempotentes — atualizar a aplicação não perde dados do volume.
+
+## 8.1 Serviços Cron (agente e backup)
+
+No Easypanel, **New Service → Cron** usando **a mesma imagem** do monitor
+(mesmo repositório, build Dockerfile). Cada cron recebe as variáveis do monitor
+(da aba Environment) mais as específicas.
+
+**Agente de IA** (analisa o dia e avisa o gestor):
+
+```
+Schedule: 0 12,19 * * *
+Command:  python -m app.agent --notify
+```
+
+Variáveis extras:
+
+```
+MONITOR_API_URL=http://127.0.0.1:8000
+MONITOR_API_KEY=<a mesma chave rw usada na API>
+LLM_PROVIDER=anthropic
+LLM_API_KEY=<chave do provedor>
+LLM_MODEL=claude-sonnet-4-5
+# Grok/xAI: LLM_PROVIDER=openai, LLM_BASE_URL=https://api.x.ai/v1, LLM_MODEL=grok-4
+MANAGER_WHATSAPP=5511999999999
+```
+
+**Backup do banco**:
+
+```
+Schedule: 0 3 * * *
+Command:  python -m app.backup --keep 14
+```
+
+O agente registra cada execução em `/api/v1/agent-runs`, visível no painel
+(`/status`). Se o dia não tiver conversas ele não publica relatório vazio.
+
+> A imagem cresce (~+250 MB) por causa do `faster-whisper`. Se não quiser
+> transcrição, defina `TRANSCRIBE_ENABLED=false` — a biblioteca continua na
+> imagem, mas nenhum modelo é carregado.
 
 ## 9. Backup
 

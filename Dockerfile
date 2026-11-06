@@ -7,24 +7,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=America/Sao_Paulo \
     PORT=8000 \
-    DATABASE_PATH=/data/monitor.db
+    DATABASE_PATH=/data/monitor.db \
+    WHISPER_MODEL_DIR=/data/models
 
 WORKDIR /app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata \
+ && apt-get install -y --no-install-recommends tzdata libgomp1 \
  && rm -rf /var/lib/apt/lists/* \
  && ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
  && echo "${TZ}" > /etc/timezone
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-whisper.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+ && (pip install --no-cache-dir -r requirements-whisper.txt \
+     || echo "AVISO: faster-whisper nao instalado; transcricao de audio desativada")
 
 COPY app ./app
 COPY docs ./docs
 COPY README.md ./
 
-RUN mkdir -p /data
+RUN mkdir -p /data /data/models /data/backups
 VOLUME ["/data"]
 EXPOSE 8000
 

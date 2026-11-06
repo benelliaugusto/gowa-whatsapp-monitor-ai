@@ -53,6 +53,9 @@ def painel(
             conversas=db.conversations_for_date(dia, include_groups=True, limit=500),
             relatorio=db.latest_report(),
             sync=db.last_sync_run(),
+            atendimento=db.attendance_metrics(dia),
+            tarefas=db.list_tasks(status="pending", limit=8),
+            transcricoes=db.transcription_stats(),
             ok=ok,
             ins=ins,
             erro=erro,
@@ -138,6 +141,9 @@ async def status(request: Request) -> HTMLResponse:
             gowa=await gowa_status(),
             resumo=db.database_summary(),
             syncs=db.recent_sync_runs(10),
+            agent_runs=db.recent_agent_runs(10),
+            transcricoes=db.transcription_stats(),
+            tarefas_pendentes=db.pending_tasks_count(),
             chaves=[
                 {"nome": entry["name"], "escopo": entry["scope"]}
                 for entry in settings.api_key_entries()
@@ -165,3 +171,8 @@ async def sincronizar(days: int = Form(default=0)) -> RedirectResponse:
 def publicar(report_id: int) -> RedirectResponse:
     db.update_report(report_id, {"status": "published"})
     return RedirectResponse(url=f"/relatorios/{report_id}", status_code=303)
+
+@router.post("/admin/tarefa/{task_id}/concluir")
+def concluir_tarefa(task_id: int, date: str | None = Form(default=None)) -> RedirectResponse:
+    db.update_task(task_id, {"status": "done"})
+    return RedirectResponse(url=f"/?date={date}" if date else "/", status_code=303)

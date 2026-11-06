@@ -133,6 +133,67 @@ class GowaClient:
             raise GowaError(f"GOWA retornou {payload.get('code')}: {payload.get('message')}", response.status_code)
         return payload
 
+    async def _post(self, path: str, *, json: dict | None = None, device_id: str | None = None) -> Any:
+        client = await self.client()
+        headers: dict[str, str] = {}
+        device = device_id or settings.gowa_device_id
+        if device:
+            headers["X-Device-Id"] = device
+        try:
+            response = await client.post(path, json=json or {}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise GowaError(f"nao foi possivel conectar ao GOWA em {self.base_url}: {exc}") from exc
+        if response.status_code >= 400:
+            raise GowaError(
+                f"GOWA respondeu HTTP {response.status_code} em {path}: {response.text[:300]}",
+                response.status_code,
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            return response.text
+        if isinstance(payload, dict) and payload.get("code") not in (None, "SUCCESS"):
+            raise GowaError(f"GOWA retornou {payload.get('code')}: {payload.get('message')}", response.status_code)
+        return payload
+
+    async def send_text(self, phone: str, message: str, *, device_id: str | None = None) -> dict:
+        """Envia mensagem de texto pelo GOWA (avisos ao gestor)."""
+        payload = await self._post(
+            "/send/message",
+            json={"phone": phone, "message": message},
+            device_id=device_id,
+        )
+        if isinstance(payload, dict) and isinstance(payload.get("results"), dict):
+            return payload["results"]
+        return payload if isinstance(payload, dict) else {}
+
+    async def download_media_bytes(
+        self, message_id: str, chat_jid: str, *, device_id: str | None = None
+    ) -> bytes:
+        """Baixa a mídia de uma mensagem para transcrição local."""
+        payload = await self._get(
+            f"/message/{message_id}/download",
+            params={"phone": chat_jid},
+            device_id=device_id,
+        )
+        resultados = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(resultados, dict):
+            raise GowaError("GOWA nao retornou metadados da midia")
+        url = resultados.get("file_url") or resultados.get("url")
+        caminho = resultados.get("file_path") or resultados.get("path")
+        if not url and caminho:
+            url = f"{self.base_url}/{str(caminho).lstrip('/')}"
+        if not url:
+            raise GowaError("GOWA nao informou file_url/file_path para a midia")
+        client = await self.client()
+        try:
+            response = await client.get(url)
+        except httpx.HTTPError as exc:
+            raise GowaError(f"falha ao baixar midia: {exc}") from exc
+        if response.status_code >= 400:
+            raise GowaError(f"falha ao baixar midia: HTTP {response.status_code}", response.status_code)
+        return response.content
+
     async def health(self) -> bool:
         try:
             client = await self.client()

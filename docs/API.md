@@ -42,6 +42,9 @@ cru com `GOWA_WEBHOOK_SECRET`).
 | GET | `/api/v1/sync/runs` | histórico de sincronizações |
 | GET | `/api/v1/gowa` | diagnóstico do GOWA |
 | GET | `/api/v1/contract` | contrato completo para o agente |
+| GET | `/api/v1/tasks` | tarefas (`status`, `owner`, `limit`) |
+| GET | `/api/v1/transcriptions/stats` | fila de transcrição por status |
+| GET | `/api/v1/agent-runs` | últimas execuções do agente |
 
 ### Escrita
 
@@ -51,6 +54,11 @@ cru com `GOWA_WEBHOOK_SECRET`).
 | POST | `/api/v1/reports` | cria relatório (idempotente) |
 | PATCH | `/api/v1/reports/{id}` | atualiza/publica relatório |
 | POST | `/api/v1/sync` | força sincronização com o GOWA |
+| POST | `/api/v1/tasks` | cria tarefa (pendência) |
+| PATCH | `/api/v1/tasks/{id}` | conclui/atualiza tarefa |
+| POST | `/api/v1/transcriptions/run` | transcreve áudios pendentes |
+| POST | `/api/v1/notify/manager` | envia resumo do dia ao gestor (WhatsApp) |
+| POST | `/api/v1/agent-runs` | registra execução do agente (cron) |
 
 ### Webhook
 
@@ -179,6 +187,37 @@ curl -s https://monitor.exemplo.com/api/v1/health
   "sync": {"enabled": true, "interval_minutes": 15, "last_run": {...}}
 }
 ```
+
+### Tarefas (pendências)
+
+```bash
+# o agente cria a partir de action_items
+curl -s -X POST "https://monitor.exemplo.com/api/v1/tasks" \
+  -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" \
+  -d '{"chat_jid":"5511999999999@s.whatsapp.net","title":"Ligar para Maria e confirmar sexta 15h","owner":"recepcao","due_at":"2026-11-05","priority":1}'
+
+# listar pendentes
+curl -s -H "X-API-Key: sk_xxx" "https://monitor.exemplo.com/api/v1/tasks?status=pending"
+
+# concluir
+curl -s -X PATCH "https://monitor.exemplo.com/api/v1/tasks/12" \
+  -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" -d '{"status":"done"}'
+```
+
+### Aviso ao gestor / transcrição / execuções
+
+```bash
+curl -s -X POST "https://monitor.exemplo.com/api/v1/notify/manager" \
+  -H "X-API-Key: sk_xxx" -H "Content-Type: application/json" -d '{"day":"2026-11-05"}'
+
+curl -s -X POST "https://monitor.exemplo.com/api/v1/transcriptions/run" \
+  -H "X-API-Key: sk_xxx"
+
+curl -s -H "X-API-Key: sk_xxx" "https://monitor.exemplo.com/api/v1/agent-runs"
+```
+
+> `GET /api/v1/stats/daily` e `GET /api/v1/digest` agora trazem `atendimento`
+> (tempo de 1ª resposta, % respondidas, sem resposta +24h, contato fora do horário).
 
 ## Códigos de erro
 

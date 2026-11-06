@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from . import api, dashboard, db, webhook
 from .config import settings
 from .gowa import GowaError, get_gowa_client, get_sync_service
+from .notify import enviar_resumo
+from .transcription import TranscriptionWorker
 from .timeutil import utc_now_iso
 
 log = logging.getLogger(__name__)
@@ -34,6 +37,7 @@ class SyncScheduler:
         self.interval = max(1, int(interval_minutes)) * 60
         self.on_startup = on_startup
         self._task: asyncio.Task | None = None
+        self._ultimo_alerta = 0.0
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="sync-scheduler")
@@ -55,8 +59,29 @@ class SyncScheduler:
                 resultado.get("chats_scanned"),
                 resultado.get("messages_inserted"),
             )
+            await self._verificar_falhas()
         except Exception:  # noqa: BLE001 - o scheduler nunca deve morrer
             log.exception("sync[%s] falhou", trigger)
+
+    async def _verificar_falhas(self) -> None:
+        """Se as duas últimas sincronizações falharam, avisa o gestor (no máximo 1x/6h)."""
+        if not settings.manager_whatsapp:
+            return
+        if db.recent_sync_failures(2) < 2:
+            return
+        agora = time.monotonic()
+        if agora - self._ultimo_alerta < 6 * 3600:
+            return
+        self._ultimo_alerta = agora
+        try:
+            await enviar_resumo(
+                texto=(
+                    "Atencao: a sincronizacao do monitor com o WhatsApp falhou nas ultimas "
+                    "2 tentativas. Verifique o servico gowa-server no EasyPanel."
+                )
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("nao foi possivel avisar o gestor sobre falha de sincronizacao")
 
     async def stop(self) -> None:
         if self._task is None:
@@ -79,6 +104,16 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         log.info("sincronizacao automatica a cada %s min", settings.sync_interval_minutes)
 
+    transcricao: TranscriptionWorker | None = None
+    if settings.transcribe_enabled:
+        transcricao = TranscriptionWorker(settings.whisper_interval_seconds, batch=2)
+        transcricao.start()
+        log.info(
+            "transcricao de audio ativa (modelo %s, a cada %ss)",
+            settings.whisper_model,
+            settings.whisper_interval_seconds,
+        )
+
     if settings.require_api_key and not settings.api_keys:
         log.warning("API_KEYS vazio: chamadas a /api/v1 serao recusadas ate configurar as chaves")
     if not settings.dashboard_password:
@@ -88,6 +123,8 @@ async def lifespan(app: FastAPI):
 
     if scheduler is not None:
         await scheduler.stop()
+    if transcricao is not None:
+        await transcricao.stop()
     await get_gowa_client().close()
 
 
